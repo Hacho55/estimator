@@ -1,0 +1,49 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Instalar dependencias
+        run: uv sync --locked
+      - name: Estructura
+        run: uv run python scripts/check_structure.py
+      - name: Ruff
+        run: uv run ruff check .
+      - name: Tests
+        run: uv run pytest
+        env:
+          LITELLM_API_KEY: dummy
+          LITELLM_BASE_URL: https://example.invalid
+          LLM_MODEL: openrouter/openai/gpt-4o-mini
+          APP_ENV: development
+          LANGFUSE_PUBLIC_KEY: ""
+          LANGFUSE_SECRET_KEY: ""
+      - name: El servidor arranca
+        env:
+          LITELLM_API_KEY: dummy
+          LITELLM_BASE_URL: https://example.invalid
+          LLM_MODEL: openrouter/openai/gpt-4o-mini
+          APP_ENV: development
+        run: |
+          uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 &
+          for _ in $(seq 1 30); do
+            curl --fail --silent http://127.0.0.1:8000/health && break
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:8000/docs >/dev/null
+          curl --fail --silent http://127.0.0.1:8000/api/v1/context >/dev/null
+      - name: Presupuesto de las variantes
+        run: uv run python scripts/run_experiment.py --dry-run
+        env:
+          LITELLM_API_KEY: dummy
+          LITELLM_BASE_URL: https://example.invalid
+          LLM_MODEL: openrouter/openai/gpt-4o-mini

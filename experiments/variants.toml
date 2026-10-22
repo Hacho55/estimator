@@ -1,0 +1,34 @@
+# Cada variante cambia una sola cosa respecto a la configuración por defecto.
+# Compararlas: uv run python scripts/run_experiment.py
+# Sin llamar al modelo: uv run python scripts/run_experiment.py --dry-run
+
+[[variant]]
+name = "baseline"
+
+[[variant]]
+name = "format-plain"
+format = "plain"
+
+[[variant]]
+name = "format-json"
+format = "json"
+
+[[variant]]
+name = "detail-summary"
+detail_level = "summary"
+
+[[variant]]
+name = "detail-full"
+detail_level = "full"
+
+[[variant]]
+name = "examples-3"
+max_examples = 3
+
+[[variant]]
+name = "cache-off"
+prompt_cache = "off"
+
+[[variant]]
+name = "model-haiku"
+model = "openrouter/anthropic/claude-haiku-4.5"
