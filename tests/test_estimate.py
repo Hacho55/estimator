@@ -23,7 +23,7 @@ def test_estimate_returns_markdown_and_metadata(client, fake_llm):
     assert body["token_budget"]["fits"] is True
     assert body["usage"]["input_tokens"] == 1200
     assert response.headers["x-request-id"]
-    assert fake_llm["calls"][0]["name"] == "estimation-turn"
+    assert fake_llm["calls"][0]["name"] == "generate-estimate"
 
 
 def test_short_transcription_is_rejected(client):
@@ -39,7 +39,7 @@ def test_repair_then_success(client, fake_llm):
     response = client.post("/api/v1/estimate", json={"transcription": TRANSCRIPTION})
     assert response.status_code == 200, response.text
     assert response.json()["usage"]["input_tokens"] == 1300
-    assert [call["name"] for call in fake_llm["calls"]] == ["estimation-turn", "estimation-repair"]
+    assert [call["name"] for call in fake_llm["calls"]] == ["generate-estimate", "repair-estimate"]
 
 
 def test_answer_is_rejected_on_single_turn(client, fake_llm):

@@ -11,7 +11,7 @@ from contextvars import ContextVar
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
-from app.config import get_settings
+from app.config import APP_VERSION, get_settings
 
 request_id_var: ContextVar[str] = ContextVar("request_id", default="-")
 logger = logging.getLogger("estimador")
@@ -70,18 +70,44 @@ def traced_span(name: str, *, as_type: str = "span"):
 
 
 @contextmanager
-def estimation_trace(session_id: str | None, tags: list[str], metadata: dict):
-    """Traza raíz de una estimación. Sin claves de Langfuse no hace nada."""
-    if not get_settings().langfuse_enabled:
+def estimation_trace(
+    session_id: str | None,
+    tags: list[str],
+    metadata: dict,
+    *,
+    transcription: str,
+):
+    """Traza raíz de un turno. Los atributos se propagan a la raíz y a cada hija.
+
+    En Langfuse v4 el coste y la sesión se agregan por observación, así que
+    session_id, entorno y versión tienen que estar puestos antes de crear las
+    generaciones. La entrada y la salida de la traza salen de esta observación.
+    """
+    settings = get_settings()
+    if not settings.langfuse_enabled:
         yield None
         return
     from langfuse import get_client, propagate_attributes
 
-    kwargs = {"tags": tags, "metadata": metadata}
+    request_id = request_id_var.get()
+    propagated_metadata = dict(metadata)
+    if request_id != "-":
+        propagated_metadata["request_id"] = request_id
+    propagated: dict = {
+        "tags": tags,
+        "metadata": propagated_metadata,
+        "version": APP_VERSION,
+        "environment": settings.APP_ENV,
+        "trace_name": "generate-estimation",
+    }
     if session_id:
-        kwargs["session_id"] = session_id
-    with get_client().start_as_current_observation(as_type="span", name="generate-estimation") as observation:
-        with propagate_attributes(**kwargs):
+        propagated["session_id"] = session_id
+    with get_client().start_as_current_observation(
+        as_type="span",
+        name="generate-estimation",
+        input=transcription,
+    ) as observation:
+        with propagate_attributes(**propagated):
             yield observation
 
 
@@ -108,7 +134,7 @@ def record_scores(scores: dict[str, float]) -> None:
 
     client = get_client()
     for name, value in scores.items():
-        client.score_current_trace(name=name, value=float(value), data_type="NUMERIC")
+        client.score_current_span(name=name, value=float(value), data_type="NUMERIC")
 
 
 def flush_langfuse() -> None:

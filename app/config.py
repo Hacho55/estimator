@@ -1,5 +1,6 @@
 """Configuración cargada una sola vez desde el entorno y desde .env."""
 
+import os
 from functools import lru_cache
 from typing import Literal
 
@@ -9,6 +10,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Langfuse lee LANGFUSE_* de os.environ. pydantic-settings no las exporta.
 load_dotenv()
+
+APP_VERSION = "0.1.0"
 
 
 class Settings(BaseSettings):
@@ -62,7 +65,12 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    settings = Settings()
+    # El cliente de Langfuse toma el entorno al crearse. Hay que dejarlo en
+    # os.environ antes de importar el SDK.
+    if settings.langfuse_enabled and not os.environ.get("LANGFUSE_TRACING_ENVIRONMENT"):
+        os.environ["LANGFUSE_TRACING_ENVIRONMENT"] = settings.APP_ENV
+    return settings
 
 
 def derive_provider(model: str) -> str:

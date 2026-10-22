@@ -5,13 +5,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
-from app.config import get_settings
+from app.config import APP_VERSION, get_settings
 from app.observability import flush_langfuse, setup_observability
 from app.routers import estimations
 from app.schemas.estimation import ErrorResponse
 from app.services.errors import ServiceError
 
-VERSION = "0.1.0"
+VERSION = APP_VERSION
 
 
 @asynccontextmanager

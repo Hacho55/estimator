@@ -197,6 +197,10 @@ def main() -> int:
                 rows.append(asyncio.run(live_row(variant, case)))
     report = write_report(rows, args.name)
     print(f"Informe: {report}")
+    if not args.dry_run:
+        from app.observability import flush_langfuse
+
+        flush_langfuse()
     if args.langfuse and not args.dry_run:
         publish_langfuse(cases, variants, args.name)
     return 0

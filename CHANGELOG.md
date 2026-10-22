@@ -4,6 +4,11 @@ El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y e
 
 ## [Unreleased]
 
+### Cambiado
+
+- Trazas de Langfuse alineadas con la plataforma v4 y el SDK de Python 5: cada observación lleva sesión, entorno y versión; la generación del modelo queda a cargo de la integración de OpenAI; las puntuaciones cuelgan de la observación raíz.
+- El README documenta la puesta en marcha, las variables de entorno, los errores habituales y el archivo que hay que tocar para cada ajuste.
+
 ## [0.1.0] - 2026-10-22
 
 ### Añadido

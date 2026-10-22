@@ -167,18 +167,24 @@ async def generate_estimation(
     model = overrides.model or settings.LLM_MODEL
     provider = derive_provider(model)
     tags = [
+        "estimacion",
+        "conversacion" if session_id else "un-turno",
         f"format:{overrides.format or settings.CONTEXT_FORMAT}",
         f"detail:{overrides.detail_level or settings.CONTEXT_DETAIL_LEVEL}",
         f"cache:{overrides.prompt_cache or settings.LLM_PROMPT_CACHE}",
     ]
-    with estimation_trace(session_id, tags, {"model": model, "provider": provider}):
+    with estimation_trace(
+        session_id,
+        tags,
+        {"model": model, "provider": provider},
+        transcription=transcription,
+    ):
         return await _generate(
             transcription,
             conversation_history,
             overrides=overrides,
             model=model,
             provider=provider,
-            session_id=session_id,
         )
 
 
@@ -189,14 +195,22 @@ async def _generate(
     overrides: ContextOverrides,
     model: str,
     provider: str,
-    session_id: str | None,
 ) -> TurnResult:
     settings = get_settings()
-    with traced_span("build-context"):
+    with traced_span("build-context") as context_span:
         block = _context_for(transcription, overrides)
+        _annotate(
+            context_span,
+            output={
+                "examples": block.included_ids,
+                "excluded": [item.id for item in block.excluded],
+                "detail_level": block.detail_level,
+                "format": block.format,
+            },
+        )
 
     history, dropped = _history_that_fits(transcription, block, conversation_history or [], overrides, model)
-    with traced_span("build-prompt"):
+    with traced_span("build-prompt") as prompt_span:
         messages = apply_cache_strategy(
             build_messages(transcription, block, history),
             provider,
@@ -210,17 +224,16 @@ async def _generate(
                 f"Entrada aproximada: {budget.total_input} tokens; ventana: {budget.window}."
             )
         version = prompt_version(system_text_of(messages) if block.examples_are_static else cacheable_text(messages, block))
+        _annotate(prompt_span, output={"prompt_version": version, "messages": len(messages)})
 
     response_format = build_response_format()
     metadata = {
         "prompt_version": version,
-        "examples": block.included_ids,
-        "session_id": session_id,
+        "examples": ",".join(block.included_ids),
     }
-    with traced_span("estimation-turn", as_type="generation"):
-        first = await llm_client.complete(
-            messages, response_format, name="estimation-turn", metadata=metadata, model=model
-        )
+    first = await llm_client.complete(
+        messages, response_format, name="generate-estimate", metadata=metadata, model=model
+    )
     _require_complete(first)
     repairs = 0
     usage = _usage_from(first)
@@ -238,14 +251,13 @@ async def _generate(
                 {"role": "user", "content": REPAIR_INSTRUCTION.format(error=exc.message)},
             ]
         )
-        with traced_span("estimation-repair", as_type="generation"):
-            second = await llm_client.complete(
-                repair_messages,
-                response_format,
-                name="estimation-repair",
-                metadata=metadata,
-                model=model,
-            )
+        second = await llm_client.complete(
+            repair_messages,
+            response_format,
+            name="repair-estimate",
+            metadata=metadata,
+            model=model,
+        )
         _require_complete(second)
         turn = parse_turn(second.content)
         _require_kind(turn, bool(history))
@@ -258,9 +270,10 @@ async def _generate(
     warnings: list[ValidationIssue] = []
     markdown = None
     if turn.kind in {"estimation", "estimation_update"}:
-        with traced_span("postprocess"):
+        with traced_span("postprocess") as post_span:
             estimation, warnings = validate_and_fix(turn.estimation)  # type: ignore[arg-type]
             markdown = render_markdown(estimation)
+            _annotate(post_span, output={"warnings": [issue.code for issue in warnings]})
 
     result = TurnResult(
         kind=turn.kind,
@@ -298,12 +311,24 @@ async def _generate(
     set_trace_io(
         input_text=transcription,
         output_text=markdown or (turn.message or ""),
-        metadata={"prompt_version": version, "kind": turn.kind, "repairs": repairs},
+        metadata={
+            "model": model,
+            "provider": provider,
+            "prompt_version": version,
+            "kind": turn.kind,
+            "repairs": repairs,
+            "cost_usd": None if cost is None else round(cost, 6),
+        },
     )
     _log(result, settings.LOG_PROMPTS, transcription, messages)
     tags = [f"prompt:{version}", f"format:{block.format}", f"detail:{block.detail_level}"]
     del tags
     return result
+
+
+def _annotate(observation, **fields) -> None:
+    if observation is not None:
+        observation.update(**fields)
 
 
 def _history_that_fits(transcription, block, history, overrides, model):
