@@ -10,6 +10,7 @@ El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y e
 
 ### Corregido
 
+- El CI deja de podar la caché de uv al terminar. Ese paso fallaba con el código 2 después de que estructura, ruff, tests, arranque y presupuesto ya habían pasado.
 - El experimento llama al modelo dentro de un solo bucle de asyncio. Cada caso abría y cerraba el suyo, y la segunda llamada fallaba con `Event loop is closed`.
 
 ### Cambiado

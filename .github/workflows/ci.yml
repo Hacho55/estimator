@@ -12,6 +12,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
+          prune-cache: false
       - name: Instalar dependencias
         run: uv sync --locked
       - name: Estructura
