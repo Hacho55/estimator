@@ -17,19 +17,19 @@ from app.tokens import build_token_budget
 
 PROMPT_LABEL = "v1"
 
-ROL_Y_TAREA = """\
+ROLE_AND_TASK = """\
 Eres un consultor senior de software con 15 años de experiencia en estimación de proyectos.
 Tu trabajo es analizar transcripciones de reuniones con clientes y generar estimaciones
 detalladas de desarrollo de software, calibradas con la realidad de esta empresa."""
 
-USO_DEL_CONTEXTO = """\
+CONTEXT_USAGE = """\
 A continuación se incluyen la tabla de tarifas de la empresa y estimaciones de proyectos
 anteriores. Úsalas como referencia para calibrar tres cosas: los precios por hora, la
 granularidad del desglose de tareas y la estructura del presupuesto. No copies un ejemplo:
 elige el parecido por tipo de proyecto y adapta el alcance a lo que dice esta transcripción.
 Si ningún ejemplo se parece, dilo en los supuestos y estima con la tabla de tarifas."""
 
-FORMATO_SALIDA = """\
+OUTPUT_FORMAT = """\
 Responde solo con un objeto JSON, sin markdown y sin texto alrededor. El objeto tiene:
 - kind: "estimation" en la primera estimación, "estimation_update" si ajustas una estimación
   ya dada, o "answer" si la petición es una pregunta y no un cambio de la estimación.
@@ -50,7 +50,7 @@ Usa EUR como moneda. Redondea las horas a múltiplos de 5. El coste de cada tare
 por tarifa. No inventes datos del cliente que la transcripción no contenga: si falta
 información, declárala como supuesto."""
 
-RESTRICCIONES = """\
+CONSTRAINTS = """\
 Reglas de cierre:
 - Estima solo lo que la transcripción describe. Lo que no esté dicho no se presupuesta.
 - No mezcles información de un ejemplo de referencia con otro.
@@ -71,16 +71,16 @@ REPAIR_INSTRUCTION = (
 def _system_segments(context_block: ContextBlock) -> list[dict[str, str]]:
     instructions = "\n\n".join(
         [
-            f"<rol_y_tarea>\n{ROL_Y_TAREA}\n</rol_y_tarea>",
-            f"<uso_del_contexto>\n{USO_DEL_CONTEXTO}\n</uso_del_contexto>",
-            f"<formato_salida>\n{FORMATO_SALIDA}\n</formato_salida>",
-            f"<tarifas>\n{context_block.static_text}\n</tarifas>",
+            f"<role_and_task>\n{ROLE_AND_TASK}\n</role_and_task>",
+            f"<context_usage>\n{CONTEXT_USAGE}\n</context_usage>",
+            f"<output_format>\n{OUTPUT_FORMAT}\n</output_format>",
+            f"<rates>\n{context_block.static_text}\n</rates>",
         ]
     )
     return [
         {"segment": "static", "text": instructions},
-        {"segment": "examples", "text": f"<ejemplos>\n{context_block.examples_text}\n</ejemplos>"},
-        {"segment": "restrictions", "text": f"<restricciones>\n{RESTRICCIONES}\n</restricciones>"},
+        {"segment": "examples", "text": f"<examples>\n{context_block.examples_text}\n</examples>"},
+        {"segment": "restrictions", "text": f"<constraints>\n{CONSTRAINTS}\n</constraints>"},
     ]
 
 
@@ -91,7 +91,7 @@ def prompt_version(system_text: str) -> str:
 
 def _history_message(message: ChatMessage, *, remind: bool) -> dict:
     if message.role == "user" and remind:
-        content = f"<recordatorio>\n{REMINDER}\n</recordatorio>\n<mensaje_usuario>\n{message.content}\n</mensaje_usuario>"
+        content = f"<reminder>\n{REMINDER}\n</reminder>\n<user_message>\n{message.content}\n</user_message>"
     else:
         content = message.content
     return {"role": message.role, "content": content}
@@ -116,8 +116,8 @@ def build_messages(
             {
                 "role": "user",
                 "content": (
-                    f"<recordatorio>\n{REMINDER}\n</recordatorio>\n"
-                    f"<mensaje_usuario>\n{transcription}\n</mensaje_usuario>"
+                    f"<reminder>\n{REMINDER}\n</reminder>\n"
+                    f"<user_message>\n{transcription}\n</user_message>"
                 ),
             }
         )
@@ -126,7 +126,7 @@ def build_messages(
             {
                 "role": "user",
                 "content": (
-                    f"<transcripcion>\n{transcription}\n</transcripcion>\n"
+                    f"<transcription>\n{transcription}\n</transcription>\n"
                     "Genera la estimación de este proyecto."
                 ),
             }
@@ -214,7 +214,7 @@ def cacheable_text(messages: list[dict], context_block: ContextBlock) -> str:
     if isinstance(content, str):
         if context_block.examples_are_static:
             return content
-        return content.split("<ejemplos>", 1)[0]
+        return content.split("<examples>", 1)[0]
     if context_block.examples_are_static:
         return "\n\n".join(block.get("text", "") for block in content)
     return content[0].get("text", "") if content else ""
@@ -231,7 +231,7 @@ def build_preview(transcription: str, context_block: ContextBlock | None = None)
     )
     prefix = system_text_of(messages)
     budget = build_token_budget(
-        instructions=prefix.split("<ejemplos>", 1)[0],
+        instructions=prefix.split("<examples>", 1)[0],
         context=block.examples_text,
         transcription=transcription,
         history="",

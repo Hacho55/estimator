@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     CONVERSATION_MAX_ACTIVE: int = Field(1000, gt=0)
     CONVERSATION_NEAR_LIMIT_RATIO: float = Field(0.8, gt=0, le=1)
 
+    # Observabilidad. Vacías: el estimador arranca y no envía trazas.
     LANGFUSE_PUBLIC_KEY: str = ""
     LANGFUSE_SECRET_KEY: SecretStr = SecretStr("")
     LANGFUSE_BASE_URL: str = "https://cloud.langfuse.com"

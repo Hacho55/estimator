@@ -22,6 +22,10 @@ Menos es más. El preprocesamiento anonimiza, normaliza y calcula los totales; e
 
 `POST /api/v1/estimate` es de un solo turno. La conversación es optativa. En el historial se guarda la estimación ya corregida, no la salida en bruto. El primer turno y la última estimación no se descartan. Un solo worker: el almacén es memoria del proceso.
 
+## Revisión
+
+La conclusión del experimento de contexto está en `experiments/CONCLUSIONES.md`. Es el archivo que hay que leer para ver qué estrategia quedó elegida.
+
 ## Secretos y verificación
 
 `.env` no se versiona. Los tests sustituyen `llm_client.complete` y no llevan claves de Langfuse.

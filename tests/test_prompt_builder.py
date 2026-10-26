@@ -17,15 +17,15 @@ def test_system_order_and_user_transcription():
     messages = build_messages("Reunión suficientemente larga para estimar el proyecto descrito.", _block())
     system = system_text_of(messages)
     positions = [
-        system.index("<rol_y_tarea>"),
-        system.index("<formato_salida>"),
-        system.index("<tarifas>"),
-        system.index("<ejemplos>"),
-        system.index("<restricciones>"),
+        system.index("<role_and_task>"),
+        system.index("<output_format>"),
+        system.index("<rates>"),
+        system.index("<examples>"),
+        system.index("<constraints>"),
     ]
     assert positions == sorted(positions)
     assert messages[1]["role"] == "user"
-    assert "<transcripcion>" in messages[1]["content"]
+    assert "<transcription>" in messages[1]["content"]
     assert "===== ESTIMACIÓN DE REFERENCIA 1 =====" in system
 
 
@@ -69,7 +69,7 @@ def test_dynamic_examples_move_the_cache_breakpoint_before_them():
     anthropic = apply_cache_strategy(messages, "anthropic", block, "auto")
     blocks = anthropic[0]["content"]
     assert blocks[0]["cache_control"] == {"type": "ephemeral"}
-    assert "<ejemplos>" in blocks[1]["text"]
+    assert "<examples>" in blocks[1]["text"]
     assert "cache_control" not in blocks[1]
 
 
@@ -81,8 +81,8 @@ def test_multiturn_reminder_and_second_cache_point():
     block = _block()
     messages = build_messages("Sube diseño a 60 horas.", block, history)
     assert messages[-1]["role"] == "user"
-    assert "<recordatorio>" in messages[-1]["content"]
-    assert "<mensaje_usuario>" in messages[-1]["content"]
+    assert "<reminder>" in messages[-1]["content"]
+    assert "<user_message>" in messages[-1]["content"]
     roles = [message["role"] for message in messages if message["role"] != "system"]
     assert roles == ["user", "assistant", "user"]
 

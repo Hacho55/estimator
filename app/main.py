@@ -17,7 +17,7 @@ VERSION = APP_VERSION
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     yield
-    flush_langfuse()
+    flush_langfuse()  # Observabilidad: manda las trazas pendientes al cerrar.
 
 
 app = FastAPI(
@@ -26,7 +26,7 @@ app = FastAPI(
     version=VERSION,
     lifespan=lifespan,
 )
-setup_observability(app)
+setup_observability(app)  # Observabilidad: logs JSON y cabecera x-request-id.
 app.include_router(estimations.router)
 
 

@@ -1,4 +1,11 @@
-"""Logs JSON, identificador de petición y trazas de Langfuse si hay claves."""
+"""Observabilidad. Este módulo no estima nada.
+
+Dos piezas, separadas más abajo:
+
+- Logs JSON y el identificador de petición. Siempre activos. Salen por stdout.
+- Trazas de Langfuse. Solo si hay claves. Sin claves, cada función de traza
+  vuelve al momento y el estimador sigue igual.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +19,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
 from app.config import APP_VERSION, get_settings
+
+# --- Logs. No van a Langfuse. ---
 
 request_id_var: ContextVar[str] = ContextVar("request_id", default="-")
 logger = logging.getLogger("estimador")
@@ -54,11 +63,16 @@ def setup_observability(app) -> None:
 
 
 def log_event(event: str, **fields) -> None:
+    """Una línea JSON en stdout. No abre una traza."""
     logger.info(event, extra={"event": {"event": event, **fields}})
+
+
+# --- Trazas de Langfuse. Quien llama no tiene que comprobar si hay claves. ---
 
 
 @contextmanager
 def traced_span(name: str, *, as_type: str = "span"):
+    """Un paso dentro de la traza raíz (build-context, build-prompt, postprocess)."""
     settings = get_settings()
     if not settings.langfuse_enabled:
         yield None
@@ -112,6 +126,7 @@ def estimation_trace(
 
 
 def set_trace_io(*, input_text: str, output_text: str, metadata: dict) -> None:
+    """Entrada y salida que Langfuse muestra en la traza. No cambia la respuesta HTTP."""
     if not get_settings().langfuse_enabled:
         return
     from langfuse import get_client
@@ -120,6 +135,7 @@ def set_trace_io(*, input_text: str, output_text: str, metadata: dict) -> None:
 
 
 def current_trace_id() -> str | None:
+    """Identificador para devolverlo en la respuesta. None si Langfuse está apagado."""
     if not get_settings().langfuse_enabled:
         return None
     from langfuse import get_client
@@ -128,6 +144,7 @@ def current_trace_id() -> str | None:
 
 
 def record_scores(scores: dict[str, float]) -> None:
+    """Cuelga las puntuaciones de la observación raíz. No las mete en la estimación."""
     if not get_settings().langfuse_enabled:
         return
     from langfuse import get_client
@@ -138,6 +155,7 @@ def record_scores(scores: dict[str, float]) -> None:
 
 
 def flush_langfuse() -> None:
+    """Envía las trazas pendientes. Se llama al apagar el proceso."""
     if not get_settings().langfuse_enabled:
         return
     from langfuse import get_client

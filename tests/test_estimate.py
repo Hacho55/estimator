@@ -70,7 +70,7 @@ def test_budget_overflow_returns_413(client, fake_llm, monkeypatch):
 def test_preview_is_development_only(client, monkeypatch):
     ok = client.post("/api/v1/estimate/preview", json={"transcription": TRANSCRIPTION})
     assert ok.status_code == 200
-    assert "<transcripcion>" in ok.json()["messages"][-1]["content"]
+    assert "<transcription>" in ok.json()["messages"][-1]["content"]
     monkeypatch.setattr(get_settings(), "APP_ENV", "production")
     hidden = client.post("/api/v1/estimate/preview", json={"transcription": TRANSCRIPTION})
     assert hidden.status_code == 404

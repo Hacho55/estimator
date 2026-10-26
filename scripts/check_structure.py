@@ -43,6 +43,7 @@ REQUIRED = [
     "data/transcripciones/04_requisitos_vagos.md",
     "data/transcripciones/05_fuera_de_alcance.md",
     "experiments/variants.toml",
+    "experiments/CONCLUSIONES.md",
     "scripts/smoke_test.sh",
     "scripts/run_experiment.py",
     ".github/workflows/ci.yml",

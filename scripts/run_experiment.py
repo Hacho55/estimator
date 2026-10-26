@@ -133,6 +133,7 @@ def write_report(rows: list[dict], name: str) -> Path:
 
 
 def publish_langfuse(cases: list[dict], variants: list[dict], name: str) -> None:
+    """Observabilidad: sube el experimento a Langfuse. El informe local ya está escrito."""
     settings = get_settings()
     if not settings.langfuse_enabled:
         print("Langfuse no está configurado: solo informe local.")
@@ -180,6 +181,21 @@ def publish_langfuse(cases: list[dict], variants: list[dict], name: str) -> None
     print(result.format())
 
 
+async def collect_live_rows(variants: list[dict], cases: list[dict]) -> list[dict]:
+    """Un solo bucle. Otro asyncio.run deja el cliente HTTP sobre un bucle ya cerrado."""
+    from app.services import llm_client
+
+    rows = []
+    try:
+        for variant in variants:
+            for case in cases:
+                print(f"{variant['name']} · {case['id']}", flush=True)
+                rows.append(await live_row(variant, case))
+        return rows
+    finally:
+        await llm_client.client.close()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Compara variantes de contexto del estimador.")
     parser.add_argument("--dry-run", action="store_true", help="Solo presupuesto de tokens, sin LLM.")
@@ -188,13 +204,10 @@ def main() -> int:
     args = parser.parse_args()
     cases = load_cases()
     variants = load_variants()
-    rows = []
-    for variant in variants:
-        for case in cases:
-            if args.dry_run:
-                rows.append(dry_row(variant, case))
-            else:
-                rows.append(asyncio.run(live_row(variant, case)))
+    if args.dry_run:
+        rows = [dry_row(variant, case) for variant in variants for case in cases]
+    else:
+        rows = asyncio.run(collect_live_rows(variants, cases))
     report = write_report(rows, args.name)
     print(f"Informe: {report}")
     if not args.dry_run:
@@ -202,6 +215,9 @@ def main() -> int:
 
         flush_langfuse()
     if args.langfuse and not args.dry_run:
+        from app.services.llm_client import reset_client
+
+        reset_client()
         publish_langfuse(cases, variants, args.name)
     return 0
 

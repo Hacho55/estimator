@@ -2,6 +2,10 @@
 
 Servicio FastAPI que recibe la transcripción de una reunión y devuelve una estimación de software. El contexto de referencia (tarifas y estimaciones históricas) viaja en cada llamada: es una arquitectura CAG, sin base de datos ni retrieval.
 
+## Qué revisar para las conclusiones
+
+El documento de la revisión es [experiments/CONCLUSIONES.md](experiments/CONCLUSIONES.md). Ahí está la estrategia elegida, cómo se puntuó y la tabla completa de la corrida del 26 de octubre de 2026. Los CSV que genera el script en `experiments/results/` no se versionan.
+
 ## Requisitos
 
 - Python 3.11 o superior. El proyecto fija 3.12 en `.python-version`.
@@ -232,7 +236,7 @@ uv run python scripts/run_experiment.py --name contexto
 uv run python scripts/run_experiment.py --name contexto --langfuse
 ```
 
-`--dry-run` solo calcula tokens. Las otras dos llaman al modelo. El informe queda en `experiments/results/`.
+`--dry-run` solo calcula tokens. Las otras dos llaman al modelo. Cada corrida escribe un informe en `experiments/results/`, y esa carpeta no se versiona. La lectura para la revisión, con la conclusión, está en [experiments/CONCLUSIONES.md](experiments/CONCLUSIONES.md).
 
 ## Tests y CI
 

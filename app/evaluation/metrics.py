@@ -1,4 +1,8 @@
-"""Puntuaciones que no dependen de un juez. Sirven en caliente y en experimentos."""
+"""Observabilidad: puntuaciones que no dependen de un juez.
+
+No forman parte de la estimación. llm_service las manda a Langfuse con
+record_scores, y el script de experimentos las guarda en el informe local.
+"""
 
 from app.context.examples import RATE_CARD
 from app.schemas.estimation import Estimation, UsageInfo, ValidationIssue

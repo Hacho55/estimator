@@ -4,8 +4,18 @@ El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y e
 
 ## [Unreleased]
 
+### Añadido
+
+- `experiments/CONCLUSIONES.md` recoge la corrida del 26 de octubre de 2026, la estrategia elegida y cómo se comparó con los rangos esperados. El README indica ese archivo como lectura de la revisión.
+
+### Corregido
+
+- El experimento llama al modelo dentro de un solo bucle de asyncio. Cada caso abría y cerraba el suyo, y la segunda llamada fallaba con `Event loop is closed`.
+
 ### Cambiado
 
+- Comentarios que marcan qué código es observabilidad (logs y trazas de Langfuse) y qué código calcula la estimación.
+- Los nombres internos (constantes, etiquetas del prompt, claves del JSON de contexto y códigos de exclusión) pasan a inglés. El texto que ve el usuario y el que lee el modelo siguen en español. El prompt pasa a `v1-983141c6`.
 - Trazas de Langfuse alineadas con la plataforma v4 y el SDK de Python 5: cada observación lleva sesión, entorno y versión; la generación del modelo queda a cargo de la integración de OpenAI; las puntuaciones cuelgan de la observación raíz.
 - El README documenta la puesta en marcha, las variables de entorno, los errores habituales y el archivo que hay que tocar para cada ajuste.
 

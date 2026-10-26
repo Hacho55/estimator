@@ -9,7 +9,7 @@ def test_obsolete_example_is_excluded_and_pii_is_removed():
     block = build_context_block(today=date(2026, 10, 22))
 
     assert "web-2017" not in block.included_ids
-    assert any(item.id == "web-2017" and item.reason == "obsoleta" for item in block.excluded)
+    assert any(item.id == "web-2017" and item.reason == "obsolete" for item in block.excluded)
     assert "inv-2024" in block.included_ids
     assert "reservas-2025" in block.included_ids
     rendered = block.text
@@ -56,14 +56,14 @@ def test_formats_are_deterministic_and_distinct():
     as_json = build_context_block(fmt="json", today=date(2026, 10, 22))
     assert markdown.examples_text == again.examples_text
     assert markdown.examples_text != plain.examples_text
-    assert '"proyecto"' in as_json.examples_text
+    assert '"project"' in as_json.examples_text
     assert "| Tarea |" in markdown.examples_text
 
 
 def test_budget_drops_examples_from_the_end():
     block = build_context_block(max_tokens=200, today=date(2026, 10, 22))
     assert len(block.included_ids) < 5
-    assert any(item.reason == "presupuesto" for item in block.excluded)
+    assert any(item.reason == "budget" for item in block.excluded)
     assert any("presupuesto" in note for note in block.notes)
 
 

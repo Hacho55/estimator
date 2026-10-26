@@ -16,17 +16,32 @@ from app.services.errors import LLMTimeoutError, LLMUnavailableError
 
 _settings = get_settings()
 
+# Observabilidad: con claves, este cliente es el de Langfuse y abre la generación
+# él solo a partir de name=. La llamada sigue siendo chat.completions. Sin claves,
+# es el cliente de openai y no hay traza.
 if _settings.langfuse_enabled:
     from langfuse.openai import AsyncOpenAI
 else:
     from openai import AsyncOpenAI
 
-client = AsyncOpenAI(
-    api_key=_settings.LITELLM_API_KEY.get_secret_value(),
-    base_url=_settings.LITELLM_BASE_URL,
-    timeout=_settings.LLM_TIMEOUT_SECONDS,
-    max_retries=_settings.LLM_MAX_RETRIES,
-)
+
+def _build_client() -> AsyncOpenAI:
+    settings = get_settings()
+    return AsyncOpenAI(
+        api_key=settings.LITELLM_API_KEY.get_secret_value(),
+        base_url=settings.LITELLM_BASE_URL,
+        timeout=settings.LLM_TIMEOUT_SECONDS,
+        max_retries=settings.LLM_MAX_RETRIES,
+    )
+
+
+client = _build_client()
+
+
+def reset_client() -> None:
+    """Nuevo cliente HTTP. El anterior queda atado al bucle de asyncio que ya se cerró."""
+    global client
+    client = _build_client()
 
 
 @dataclass
@@ -87,6 +102,7 @@ async def complete(
         "max_tokens": settings.LLM_MAX_TOKENS,
         "response_format": response_format,
     }
+    # Observabilidad: name y metadata solo los lee el wrapper de Langfuse.
     if settings.langfuse_enabled:
         payload["name"] = name
         payload["metadata"] = metadata or {}

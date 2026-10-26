@@ -192,17 +192,17 @@ def render_estimate(estimate: PreparedEstimate, index: int, detail_level: str, f
     if fmt == "json":
         payload = {
             "id": estimate.id,
-            "proyecto": estimate.title,
+            "project": estimate.title,
             "sector": estimate.sector,
-            "perfil": estimate.client_profile,
-            "resumen": estimate.meeting_summary,
-            "tareas": _tasks_payload(estimate, detail_level),
-            "total_horas": estimate.total_hours,
-            "total_coste_eur": estimate.total_cost_eur,
-            "equipo": estimate.team,
-            "duracion_semanas": [estimate.duration_weeks_min, estimate.duration_weeks_max],
-            "supuestos": assumptions,
-            "riesgos": risks,
+            "profile": estimate.client_profile,
+            "summary": estimate.meeting_summary,
+            "tasks": _tasks_payload(estimate, detail_level),
+            "total_hours": estimate.total_hours,
+            "total_cost_eur": estimate.total_cost_eur,
+            "team": estimate.team,
+            "duration_weeks": [estimate.duration_weeks_min, estimate.duration_weeks_max],
+            "assumptions": assumptions,
+            "risks": risks,
         }
         body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     elif fmt == "plain":
@@ -215,14 +215,14 @@ def render_estimate(estimate: PreparedEstimate, index: int, detail_level: str, f
 def _tasks_payload(estimate: PreparedEstimate, detail_level: str) -> list[dict]:
     if detail_level == "summary":
         return [
-            {"fase": phase, "horas": hours} for phase, hours in estimate.hours_by_phase.items()
+            {"phase": phase, "hours": hours} for phase, hours in estimate.hours_by_phase.items()
         ]
     rows = []
     for task in estimate.tasks:
-        row = {"nombre": task.name, "fase": task.phase, "rol": task.role, "horas": task.hours}
+        row = {"name": task.name, "phase": task.phase, "role": task.role, "hours": task.hours}
         if detail_level == "full":
-            row["tarifa_eur_hora"] = task.rate_eur
-            row["coste_eur"] = task.cost_eur
+            row["rate_eur_hour"] = task.rate_eur
+            row["cost_eur"] = task.cost_eur
         rows.append(row)
     return rows
 
@@ -356,7 +356,7 @@ def build_context_block(
     fresh: list[HistoricalEstimate] = []
     for estimate in loaded:
         if current_year - estimate.year > max_age_years:
-            excluded.append(Exclusion(id=estimate.id, reason="obsoleta"))
+            excluded.append(Exclusion(id=estimate.id, reason="obsolete"))
         else:
             fresh.append(estimate)
 
@@ -382,7 +382,7 @@ def build_context_block(
             continue
         dropped = prepared[-1]
         prepared = prepared[:-1]
-        excluded.append(Exclusion(id=dropped.id, reason="presupuesto"))
+        excluded.append(Exclusion(id=dropped.id, reason="budget"))
         notes.append(f"Ejemplo {dropped.id} fuera por presupuesto de tokens.")
 
     return ContextBlock(

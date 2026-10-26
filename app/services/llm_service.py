@@ -2,6 +2,10 @@
 
 No conoce HTTP ni conversaciones. El historial es una lista de mensajes que el
 router decide pasar. Sin historial, la llamada es de un solo turno.
+
+Observabilidad, mezclada aquí a propósito y marcada en cada sitio: estimation_trace,
+traced_span, record_scores, set_trace_io y log_event. Ninguna cambia la estimación.
+La implementación vive en app/observability.py.
 """
 
 from __future__ import annotations
@@ -166,13 +170,15 @@ async def generate_estimation(
     overrides = overrides or ContextOverrides()
     model = overrides.model or settings.LLM_MODEL
     provider = derive_provider(model)
+    # Observabilidad: etiquetas de la traza. No viajan al modelo.
     tags = [
-        "estimacion",
-        "conversacion" if session_id else "un-turno",
+        "estimation",
+        "conversation" if session_id else "single-turn",
         f"format:{overrides.format or settings.CONTEXT_FORMAT}",
         f"detail:{overrides.detail_level or settings.CONTEXT_DETAIL_LEVEL}",
         f"cache:{overrides.prompt_cache or settings.LLM_PROMPT_CACHE}",
     ]
+    # Observabilidad: abre la traza raíz. Sin claves, el bloque solo ejecuta _generate.
     with estimation_trace(
         session_id,
         tags,
@@ -197,6 +203,7 @@ async def _generate(
     provider: str,
 ) -> TurnResult:
     settings = get_settings()
+    # Observabilidad: el span anota el paso. _context_for es el trabajo del estimador.
     with traced_span("build-context") as context_span:
         block = _context_for(transcription, overrides)
         _annotate(
@@ -210,6 +217,7 @@ async def _generate(
         )
 
     history, dropped = _history_that_fits(transcription, block, conversation_history or [], overrides, model)
+    # Observabilidad: el span anota el prompt. El 413 lo decide el presupuesto, no la traza.
     with traced_span("build-prompt") as prompt_span:
         messages = apply_cache_strategy(
             build_messages(transcription, block, history),
@@ -270,6 +278,7 @@ async def _generate(
     warnings: list[ValidationIssue] = []
     markdown = None
     if turn.kind in {"estimation", "estimation_update"}:
+        # Observabilidad: el span anota los avisos. validate_and_fix es el trabajo del estimador.
         with traced_span("postprocess") as post_span:
             estimation, warnings = validate_and_fix(turn.estimation)  # type: ignore[arg-type]
             markdown = render_markdown(estimation)
@@ -295,10 +304,11 @@ async def _generate(
         latency_ms=latency,
         model=first.model,
         provider=provider,
-        trace_id=current_trace_id(),
+        trace_id=current_trace_id(),  # Observabilidad: None si Langfuse está apagado.
         dropped_turns=dropped,
         repairs=repairs,
     )
+    # Observabilidad: la estimación ya está en result. Esto solo puntúa y registra.
     scores = collect_metrics(
         first_try=repairs == 0,
         warnings=warnings,
@@ -320,13 +330,14 @@ async def _generate(
             "cost_usd": None if cost is None else round(cost, 6),
         },
     )
-    _log(result, settings.LOG_PROMPTS, transcription, messages)
+    _log(result, settings.LOG_PROMPTS, transcription, messages)  # Log local, no es una traza.
     tags = [f"prompt:{version}", f"format:{block.format}", f"detail:{block.detail_level}"]
     del tags
     return result
 
 
 def _annotate(observation, **fields) -> None:
+    """Observabilidad: adjunta datos al span. Sin Langfuse, observation es None."""
     if observation is not None:
         observation.update(**fields)
 
@@ -348,7 +359,7 @@ def _history_that_fits(transcription, block, history, overrides, model):
 def _budget(messages, block: ContextBlock, transcription: str, history: list[ChatMessage], model: str):
     settings = get_settings()
     system = system_text_of(messages)
-    instructions, _, _rest = system.partition("<ejemplos>")
+    instructions, _, _rest = system.partition("<examples>")
     history_text = "\n".join(message.content for message in history)
     return build_token_budget(
         instructions=instructions,
@@ -364,6 +375,7 @@ def _budget(messages, block: ContextBlock, transcription: str, history: list[Cha
 
 
 def _log(result: TurnResult, log_prompts: bool, transcription: str, messages: list[dict]) -> None:
+    """Observabilidad local: una línea JSON en stdout. Independiente de Langfuse."""
     fields = {
         "model": result.model,
         "provider": result.provider,

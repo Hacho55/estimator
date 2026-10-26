@@ -96,7 +96,7 @@ class EstimationResponse(BaseModel):
     usage: UsageInfo
     cost_usd: float | None = None
     latency_ms: float
-    trace_id: str | None = None
+    trace_id: str | None = None  # Observabilidad. Vacío si Langfuse está apagado.
     created_at: datetime
 
 
