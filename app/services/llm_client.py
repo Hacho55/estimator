@@ -174,6 +174,111 @@ async def _request(
     )
 
 
+class TokenStream:
+    """Sesión 3 · streaming: trozos con la forma de OpenAI, vía LiteLLM.
+
+    Si falla antes del primer token, vale un solo intento con el modelo de reserva.
+    Si ya salió texto, no se cambia de modelo a mitad de frase. El resultado queda
+    en `result` cuando el generador termina.
+    """
+
+    def __init__(
+        self,
+        messages: list[dict],
+        response_format: dict,
+        *,
+        name: str,
+        metadata: dict | None = None,
+        model: str | None = None,
+    ) -> None:
+        self.messages = messages
+        self.response_format = response_format
+        self.name = name
+        self.metadata = metadata
+        self.model = model
+        self.result: LLMResult | None = None
+
+    def __aiter__(self):
+        return self._iterate()
+
+    async def _iterate(self):
+        settings = get_settings()
+        chosen = self.model or settings.LLM_MODEL
+        emitted = False
+        try:
+            async for piece in self._consume(chosen, self.name, self.metadata):
+                emitted = True
+                yield piece
+            return
+        except (APITimeoutError, APIConnectionError, APIError) as exc:
+            if emitted:
+                raise _as_service_error(exc) from exc
+            reserve = settings.LLM_FALLBACK_MODEL.strip()
+            reason = _fallback_reason(exc)
+            if not (reason and reserve and reserve != chosen):
+                raise _as_service_error(exc) from exc
+            fallback_metadata = {**(self.metadata or {}), "fallback": True, "error_type": reason}
+            try:
+                async for piece in self._consume(reserve, _fallback_name(self.name), fallback_metadata):
+                    yield piece
+            except (APITimeoutError, APIConnectionError, APIError) as second:
+                raise _as_service_error(second) from second
+
+    async def _consume(self, model: str, name: str, metadata: dict | None):
+        settings = get_settings()
+        payload: dict = {
+            "model": model,
+            "messages": _public_messages(self.messages),
+            "temperature": settings.LLM_TEMPERATURE,
+            "max_tokens": settings.LLM_MAX_TOKENS,
+            "response_format": self.response_format,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        if settings.langfuse_enabled:
+            payload["name"] = name
+            payload["metadata"] = metadata or {}
+
+        started = time.perf_counter()
+        stream = await client.chat.completions.create(**payload)
+        parts: list[str] = []
+        finish_reason = None
+        usage = None
+        answered = model
+        async for chunk in stream:
+            chunk_model = getattr(chunk, "model", None)
+            if chunk_model:
+                answered = chunk_model
+            chunk_usage = getattr(chunk, "usage", None)
+            if chunk_usage is not None:
+                usage = chunk_usage
+            choices = getattr(chunk, "choices", None) or []
+            if not choices:
+                continue
+            choice = choices[0]
+            if choice.finish_reason:
+                finish_reason = choice.finish_reason
+            delta = getattr(choice, "delta", None)
+            text = getattr(delta, "content", None) or ""
+            if text:
+                parts.append(text)
+                yield text
+
+        input_tokens, output_tokens, total_tokens, cached, created = _usage_details(usage)
+        self.result = LLMResult(
+            content="".join(parts),
+            model=answered,
+            finish_reason=finish_reason,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=total_tokens,
+            cached_tokens=cached,
+            cache_creation_tokens=created,
+            cost_usd=None,
+            latency_ms=(time.perf_counter() - started) * 1000,
+        )
+
+
 async def complete(
     messages: list[dict],
     response_format: dict,

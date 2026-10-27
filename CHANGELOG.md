@@ -6,6 +6,7 @@ El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y e
 
 ### Añadido
 
+- El cliente puede entregar la respuesta del modelo por trozos. Un acierto de caché sale de una vez. Si el stream se corta antes del primer token, vale el modelo de reserva; si ya empezó, no se cambia a mitad. `finish_reason=length` sigue sin guardarse en la caché. `POST /api/v1/estimate` no cambia.
 - La caché de respuestas guarda en memoria, 24 horas, la estimación de una petición idéntica (transcripción, modelo, temperatura, versión del prompt e historial). Un acierto no llama al modelo y la respuesta lo marca en `cache_hit`.
 - `LLM_ROUTING=complexity` elige el modelo antes de estimar. Solo una transcripción corta, sin historial y con un requisito técnico como mucho, pasa a `LLM_FALLBACK_MODEL`. El defecto sigue siendo `off`.
 - Si `LLM_FALLBACK_MODEL` está definido, una llamada que falla por timeout, corte de conexión, 429, 5xx o un 400 de formato se repite una vez con ese modelo. La respuesta publica el modelo que contestó. 401, 403 y el resto de 400 no cambian de modelo.

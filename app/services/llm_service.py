@@ -37,6 +37,7 @@ from app.services.errors import (
     ContextBudgetExceededError,
     InvalidLLMOutputError,
     LLMOutputTruncatedError,
+    LLMUnavailableError,
 )
 from app.services.postprocessor import (
     parse_turn,
@@ -235,14 +236,43 @@ async def generate_estimation(
         )
 
 
-async def _generate(
+@dataclass
+class _Prepared:
+    block: ContextBlock
+    history: list[ChatMessage]
+    dropped: int
+    messages: list[dict]
+    budget: object
+    version: str
+    response_format: dict
+    metadata: dict
+    key: str
+    cached: object
+
+
+def _cached_result(cached) -> llm_client.LLMResult:
+    return llm_client.LLMResult(
+        content=cached.content,
+        model=cached.model,
+        finish_reason=cached.finish_reason,
+        input_tokens=0,
+        output_tokens=0,
+        total_tokens=0,
+        cached_tokens=0,
+        cache_creation_tokens=None,
+        cost_usd=0,
+        latency_ms=0,
+    )
+
+
+def _prepare(
     transcription: str,
     conversation_history: list[ChatMessage] | None,
     *,
     overrides: ContextOverrides,
     model: str,
     provider: str,
-) -> TurnResult:
+) -> _Prepared:
     settings = get_settings()
     # Observabilidad: el span anota el paso. _context_for es el trabajo del estimador.
     with traced_span("build-context") as context_span:
@@ -275,11 +305,6 @@ async def _generate(
         version = prompt_version(system_text_of(messages) if block.examples_are_static else cacheable_text(messages, block))
         _annotate(prompt_span, output={"prompt_version": version, "messages": len(messages)})
 
-    response_format = build_response_format()
-    metadata = {
-        "prompt_version": version,
-        "examples": ",".join(block.included_ids),
-    }
     # Sesión 3 · caché: la clave incluye el historial para no mezclar turnos.
     key = cache_key(
         transcription=transcription,
@@ -288,24 +313,144 @@ async def _generate(
         prompt_version=version,
         history=history,
     )
-    cached = lookup(key)
-    if cached is None:
+    return _Prepared(
+        block=block,
+        history=history,
+        dropped=dropped,
+        messages=messages,
+        budget=budget,
+        version=version,
+        response_format=build_response_format(),
+        metadata={"prompt_version": version, "examples": ",".join(block.included_ids)},
+        key=key,
+        cached=lookup(key),
+    )
+
+
+class EstimationStream:
+    """Sesión 3 · streaming: un acierto sale entero. Si no, llegan los trozos del modelo.
+
+    Al terminar, `result` es la estimación ya validada. El texto emitido es el JSON
+    del modelo; el markdown queda en el resultado.
+    """
+
+    def __init__(
+        self,
+        transcription: str,
+        conversation_history: list[ChatMessage] | None = None,
+        *,
+        overrides: ContextOverrides | None = None,
+        session_id: str | None = None,
+    ) -> None:
+        self.transcription = transcription
+        self.conversation_history = conversation_history
+        self.overrides = overrides or ContextOverrides()
+        self.session_id = session_id
+        self.result: TurnResult | None = None
+
+    def __aiter__(self):
+        return self._iterate()
+
+    async def _iterate(self):
+        settings = get_settings()
+        overrides = self.overrides
+        model = overrides.model or choose_model(self.transcription, has_history=bool(self.conversation_history))
+        provider = derive_provider(model)
+        tags = [
+            "estimation",
+            "conversation" if self.session_id else "single-turn",
+            f"format:{overrides.format or settings.CONTEXT_FORMAT}",
+            f"detail:{overrides.detail_level or settings.CONTEXT_DETAIL_LEVEL}",
+            f"cache:{overrides.prompt_cache or settings.LLM_PROMPT_CACHE}",
+        ]
+        with estimation_trace(
+            self.session_id,
+            tags,
+            {"model": model, "provider": provider},
+            transcription=self.transcription,
+        ):
+            prepared = _prepare(
+                self.transcription,
+                self.conversation_history,
+                overrides=overrides,
+                model=model,
+                provider=provider,
+            )
+            if prepared.cached is not None:
+                yield prepared.cached.content
+                first = _cached_result(prepared.cached)
+            else:
+                tokens = llm_client.TokenStream(
+                    prepared.messages,
+                    prepared.response_format,
+                    name="generate-estimate",
+                    metadata=prepared.metadata,
+                    model=model,
+                )
+                async for piece in tokens:
+                    yield piece
+                if tokens.result is None:
+                    raise LLMUnavailableError("El modelo no envió una respuesta.")
+                first = tokens.result
+            self.result = await _assemble(first, prepared, transcription=self.transcription, model=model)
+
+
+def stream_estimation(
+    transcription: str,
+    conversation_history: list[ChatMessage] | None = None,
+    *,
+    overrides: ContextOverrides | None = None,
+    session_id: str | None = None,
+) -> EstimationStream:
+    """Sesión 3 · streaming: lo que Streamlit y Chainlit iteran. El POST sigue en generate_estimation."""
+    return EstimationStream(
+        transcription,
+        conversation_history,
+        overrides=overrides,
+        session_id=session_id,
+    )
+
+
+async def _generate(
+    transcription: str,
+    conversation_history: list[ChatMessage] | None,
+    *,
+    overrides: ContextOverrides,
+    model: str,
+    provider: str,
+) -> TurnResult:
+    prepared = _prepare(
+        transcription,
+        conversation_history,
+        overrides=overrides,
+        model=model,
+        provider=provider,
+    )
+    if prepared.cached is None:
         first = await llm_client.complete(
-            messages, response_format, name="generate-estimate", metadata=metadata, model=model
+            prepared.messages,
+            prepared.response_format,
+            name="generate-estimate",
+            metadata=prepared.metadata,
+            model=model,
         )
     else:
-        first = llm_client.LLMResult(
-            content=cached.content,
-            model=cached.model,
-            finish_reason=cached.finish_reason,
-            input_tokens=0,
-            output_tokens=0,
-            total_tokens=0,
-            cached_tokens=0,
-            cache_creation_tokens=None,
-            cost_usd=0,
-            latency_ms=0,
-        )
+        first = _cached_result(prepared.cached)
+    return await _assemble(first, prepared, transcription=transcription, model=model)
+
+
+async def _assemble(first: llm_client.LLMResult, prepared: _Prepared, *, transcription: str, model: str) -> TurnResult:
+    settings = get_settings()
+    messages = prepared.messages
+    history = prepared.history
+    response_format = prepared.response_format
+    metadata = prepared.metadata
+    version = prepared.version
+    block = prepared.block
+    budget = prepared.budget
+    cached = prepared.cached
+    key = prepared.key
+    dropped = prepared.dropped
     _require_complete(first)
     repairs = 0
     answered = first
