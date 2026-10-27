@@ -3,6 +3,7 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import APP_VERSION, get_settings
@@ -27,6 +28,13 @@ app = FastAPI(
     lifespan=lifespan,
 )
 setup_observability(app)  # Observabilidad: logs JSON y cabecera x-request-id.
+# Sesión 3 · front: el navegador en :3000 llama al SSE. Sin esto el preflight falla.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["content-type"],
+)
 app.include_router(estimations.router)
 
 

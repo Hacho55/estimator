@@ -6,6 +6,7 @@ El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y e
 
 ### Añadido
 
+- El front en `web/` es una aplicación Next que lee `POST /api/v1/estimate/stream`: muestra los trozos y, al cerrar, el markdown. Un acierto de caché pinta la estimación de una vez. Los colores y las familias salen de la página de Netretina.
 - `POST /api/v1/estimate/stream` envía cada trozo en un evento `token` y cierra con `estimate`. Un acierto de caché manda solo `estimate`. `POST /api/v1/estimate` no cambia.
 - `chainlit_app.py` ofrece la misma conversación que Streamlit: streaming, historial y si la última respuesta salió de caché.
 - `streamlit_app.py` conversa con el mismo estimador, escribe la respuesta por trozos y deja el markdown en el historial. El panel muestra el prompt, el contexto y, de la última llamada, modelo, tokens, latencia y si salió de caché.

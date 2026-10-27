@@ -51,6 +51,12 @@ La misma conversación, con Chainlit:
 uv run chainlit run chainlit_app.py
 ```
 
+El front, en otra carpeta, consume el stream de la API. Primero tiene que estar uvicorn en el puerto 8000:
+
+```bash
+cd web && npm install && npm run dev
+```
+
 Comprueba que responde. `/health` debe devolver `status` igual a `healthy`, la versión y el modelo configurado:
 
 ```bash

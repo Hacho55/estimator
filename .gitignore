@@ -22,6 +22,9 @@ experiments/results/*
 .chainlit/
 .files/
 
+web/node_modules/
+web/.next/
+
 .DS_Store
 .idea/
 .vscode/

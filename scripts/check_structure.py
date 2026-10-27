@@ -48,6 +48,8 @@ REQUIRED = [
     "scripts/run_experiment.py",
     "streamlit_app.py",
     "chainlit_app.py",
+    "web/package.json",
+    "web/app/page.tsx",
     ".github/workflows/ci.yml",
     ".agents/skills/verify-estimador/SKILL.md",
     ".agents/skills/iterate-system-prompt/SKILL.md",

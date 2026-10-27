@@ -1,0 +1,104 @@
+/* Sesión 3 · front: fondo, texto y acento de netretina.com. Visby si está instalada. */
+:root {
+  --bg: #f7f8f9;
+  --surface: #ffffff;
+  --surface-muted: #f0f0f0;
+  --text: #222222;
+  --text-muted: #575760;
+  --line: #b2b2be;
+  --accent: #1e73be;
+  --button: #32373c;
+  --font-body: "Visby medium", "Avenir Next", "Segoe UI", sans-serif;
+  --font-display: "Visby Heavy", "Avenir Next", "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+}
+
+h1,
+button {
+  font-family: var(--font-display);
+}
+
+main {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 48px 20px 80px;
+}
+
+h1 {
+  margin: 0 0 8px;
+  font-size: 2rem;
+  letter-spacing: -0.03em;
+}
+
+.lede {
+  margin: 0 0 28px;
+  color: var(--text-muted);
+}
+
+form {
+  display: grid;
+  gap: 12px;
+  background: var(--surface);
+  border: 1px solid var(--surface-muted);
+  border-top: 4px solid var(--accent);
+  padding: 20px;
+}
+
+textarea {
+  width: 100%;
+  min-height: 180px;
+  resize: vertical;
+  border: 1px solid var(--line);
+  padding: 12px;
+  font: inherit;
+  color: inherit;
+  background: var(--surface);
+}
+
+button {
+  justify-self: start;
+  border: 0;
+  border-radius: 999px;
+  background: var(--button);
+  color: #fff;
+  padding: 12px 22px;
+  font-size: 1rem;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.meta,
+.error {
+  margin-top: 18px;
+  color: var(--text-muted);
+}
+
+.error {
+  color: #cf2e2e;
+}
+
+.draft,
+.estimate {
+  margin-top: 22px;
+  background: var(--surface);
+  padding: 20px;
+}
+
+.draft {
+  color: var(--text-muted);
+  white-space: pre-wrap;
+}
