@@ -20,6 +20,8 @@ from app.observability import (
     current_trace_id,
     estimation_trace,
     log_event,
+    log_llm_completed,
+    log_llm_started,
     record_scores,
     set_trace_io,
     traced_span,
@@ -250,6 +252,28 @@ class _Prepared:
     cached: object
 
 
+def _log_cache_hit(cached, estimated_input_tokens: int) -> None:
+    """Sesión 3 · logs: un acierto no es una llamada, pero deja las dos líneas."""
+    provider = derive_provider(cached.model)
+    log_llm_started(
+        model=cached.model,
+        provider=provider,
+        tokens_in=estimated_input_tokens,
+        cache_hit=True,
+    )
+    log_llm_completed(
+        model=cached.model,
+        provider=provider,
+        tokens_in=0,
+        tokens_out=0,
+        latency_ms=0,
+        cost_usd=0,
+        finish_reason=cached.finish_reason,
+        fallback_used=False,
+        cache_hit=True,
+    )
+
+
 def _cached_result(cached) -> llm_client.LLMResult:
     return llm_client.LLMResult(
         content=cached.content,
@@ -377,6 +401,7 @@ class EstimationStream:
                 provider=provider,
             )
             if prepared.cached is not None:
+                _log_cache_hit(prepared.cached, prepared.budget.total_input)
                 yield prepared.cached.content
                 first = _cached_result(prepared.cached)
             else:
@@ -386,6 +411,7 @@ class EstimationStream:
                     name="generate-estimate",
                     metadata=prepared.metadata,
                     model=model,
+                    estimated_input_tokens=prepared.budget.total_input,
                 )
                 async for piece in tokens:
                     yield piece
@@ -433,8 +459,10 @@ async def _generate(
             name="generate-estimate",
             metadata=prepared.metadata,
             model=model,
+            estimated_input_tokens=prepared.budget.total_input,
         )
     else:
+        _log_cache_hit(prepared.cached, prepared.budget.total_input)
         first = _cached_result(prepared.cached)
     return await _assemble(first, prepared, transcription=transcription, model=model)
 

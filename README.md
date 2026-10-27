@@ -77,7 +77,7 @@ Cada cambio en `.env` exige reiniciar uvicorn. La configuración se lee una vez 
 | `APP_ENV` | no | `development` | `development`, `staging`, `production` | Entorno de Langfuse. En `production` desaparece `/estimate/preview` |
 | `APP_NAME` | no | `Estimador CAG` | texto | Nombre interno |
 | `LOG_LEVEL` | no | `DEBUG` | `DEBUG`, `INFO`, `WARNING`, `ERROR` | Verbosidad |
-| `LOG_FORMAT` | no | `json` | `json` o `text` | Formato de cada línea de log |
+| `LOG_FORMAT` | no | `json` | `json` o `text` | Formato del log de negocio y de las líneas `llm_call_*`. `text` las pinta en consola |
 | `LOG_PROMPTS` | no | `false` | `true` o `false` | Si el log incluye la transcripción y los mensajes |
 | `CONTEXT_FORMAT` | no | `markdown` | `markdown`, `plain`, `json` | Cómo se escriben tarifas y ejemplos dentro del prompt |
 | `CONTEXT_DETAIL_LEVEL` | no | `standard` | `summary`, `standard`, `full` | Cuánto detalle lleva cada ejemplo |

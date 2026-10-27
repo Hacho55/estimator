@@ -11,7 +11,8 @@ from dataclasses import dataclass
 
 from openai import APIConnectionError, APIError, APITimeoutError
 
-from app.config import get_settings
+from app.config import derive_provider, get_settings
+from app.observability import log_llm_completed, log_llm_failed, log_llm_started
 from app.services.errors import LLMTimeoutError, LLMUnavailableError
 
 _settings = get_settings()
@@ -125,6 +126,58 @@ def _fallback_reason(exc: Exception) -> str | None:
     return None
 
 
+def _error_label(exc: Exception) -> str:
+    """Sesión 3 · logs: el tipo que viaja en llm_call_failed."""
+    reason = _fallback_reason(exc)
+    if reason:
+        return reason
+    status = getattr(exc, "status_code", None)
+    if status in (401, 403):
+        return "auth"
+    if status == 400:
+        return "bad_request"
+    return type(exc).__name__
+
+
+def _will_fallback(exc: Exception, chosen: str) -> bool:
+    reserve = get_settings().LLM_FALLBACK_MODEL.strip()
+    return bool(_fallback_reason(exc) and reserve and reserve != chosen)
+
+
+def _log_ok(result: LLMResult, *, fallback_used: bool) -> None:
+    log_llm_completed(
+        model=result.model,
+        provider=derive_provider(result.model),
+        tokens_in=result.input_tokens,
+        tokens_out=result.output_tokens,
+        latency_ms=result.latency_ms,
+        cost_usd=result.cost_usd,
+        finish_reason=result.finish_reason,
+        fallback_used=fallback_used,
+        cache_hit=False,
+    )
+
+
+def _log_fail(
+    exc: Exception,
+    model: str,
+    *,
+    attempt: int,
+    latency_ms: float,
+    will_fallback: bool | None = None,
+) -> None:
+    if will_fallback is None:
+        will_fallback = _will_fallback(exc, model) if attempt == 1 else False
+    log_llm_failed(
+        model=model,
+        provider=derive_provider(model),
+        error_type=_error_label(exc),
+        will_fallback=will_fallback,
+        attempt=attempt,
+        latency_ms=latency_ms,
+    )
+
+
 def _as_service_error(exc: Exception) -> LLMTimeoutError | LLMUnavailableError:
     if isinstance(exc, APITimeoutError):
         return LLMTimeoutError(f"El modelo no respondió a tiempo: {exc}")
@@ -190,12 +243,14 @@ class TokenStream:
         name: str,
         metadata: dict | None = None,
         model: str | None = None,
+        estimated_input_tokens: int | None = None,
     ) -> None:
         self.messages = messages
         self.response_format = response_format
         self.name = name
         self.metadata = metadata
         self.model = model
+        self.estimated_input_tokens = estimated_input_tokens
         self.result: LLMResult | None = None
 
     def __aiter__(self):
@@ -205,12 +260,29 @@ class TokenStream:
         settings = get_settings()
         chosen = self.model or settings.LLM_MODEL
         emitted = False
+        log_llm_started(
+            model=chosen,
+            provider=derive_provider(chosen),
+            tokens_in=self.estimated_input_tokens,
+            cache_hit=False,
+            attempt=1,
+        )
+        started = time.perf_counter()
         try:
             async for piece in self._consume(chosen, self.name, self.metadata):
                 emitted = True
                 yield piece
+            if self.result is not None:
+                _log_ok(self.result, fallback_used=False)
             return
         except (APITimeoutError, APIConnectionError, APIError) as exc:
+            _log_fail(
+                exc,
+                chosen,
+                attempt=1,
+                latency_ms=(time.perf_counter() - started) * 1000,
+                will_fallback=False if emitted else None,
+            )
             if emitted:
                 raise _as_service_error(exc) from exc
             reserve = settings.LLM_FALLBACK_MODEL.strip()
@@ -218,10 +290,21 @@ class TokenStream:
             if not (reason and reserve and reserve != chosen):
                 raise _as_service_error(exc) from exc
             fallback_metadata = {**(self.metadata or {}), "fallback": True, "error_type": reason}
+            log_llm_started(
+                model=reserve,
+                provider=derive_provider(reserve),
+                tokens_in=self.estimated_input_tokens,
+                cache_hit=False,
+                attempt=2,
+            )
+            retry = time.perf_counter()
             try:
                 async for piece in self._consume(reserve, _fallback_name(self.name), fallback_metadata):
                     yield piece
+                if self.result is not None:
+                    _log_ok(self.result, fallback_used=True)
             except (APITimeoutError, APIConnectionError, APIError) as second:
+                _log_fail(second, reserve, attempt=2, latency_ms=(time.perf_counter() - retry) * 1000)
                 raise _as_service_error(second) from second
 
     async def _consume(self, model: str, name: str, metadata: dict | None):
@@ -286,19 +369,37 @@ async def complete(
     name: str,
     metadata: dict | None = None,
     model: str | None = None,
+    estimated_input_tokens: int | None = None,
 ) -> LLMResult:
     settings = get_settings()
     chosen = model or settings.LLM_MODEL
+    log_llm_started(
+        model=chosen,
+        provider=derive_provider(chosen),
+        tokens_in=estimated_input_tokens,
+        cache_hit=False,
+        attempt=1,
+    )
+    started = time.perf_counter()
     try:
-        return await _request(messages, response_format, name=name, metadata=metadata, model=chosen)
+        result = await _request(messages, response_format, name=name, metadata=metadata, model=chosen)
     except (APITimeoutError, APIConnectionError, APIError) as exc:
+        _log_fail(exc, chosen, attempt=1, latency_ms=(time.perf_counter() - started) * 1000)
         reserve = settings.LLM_FALLBACK_MODEL.strip()
         reason = _fallback_reason(exc)
         # Sesión 3 · fallback: un solo intento, y solo si el reserva es otro modelo.
         if reason and reserve and reserve != chosen:
             fallback_metadata = {**(metadata or {}), "fallback": True, "error_type": reason}
+            log_llm_started(
+                model=reserve,
+                provider=derive_provider(reserve),
+                tokens_in=estimated_input_tokens,
+                cache_hit=False,
+                attempt=2,
+            )
+            retry = time.perf_counter()
             try:
-                return await _request(
+                result = await _request(
                     messages,
                     response_format,
                     name=_fallback_name(name),
@@ -306,8 +407,13 @@ async def complete(
                     model=reserve,
                 )
             except (APITimeoutError, APIConnectionError, APIError) as second:
+                _log_fail(second, reserve, attempt=2, latency_ms=(time.perf_counter() - retry) * 1000)
                 raise _as_service_error(second) from second
+            _log_ok(result, fallback_used=True)
+            return result
         raise _as_service_error(exc) from exc
+    _log_ok(result, fallback_used=False)
+    return result
 
 
 def _public_messages(messages: list[dict]) -> list[dict]:

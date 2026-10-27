@@ -42,7 +42,7 @@ def fake_llm(monkeypatch):
     scripts: list[dict] = [{"content": estimation_turn(), "finish_reason": "stop"}]
     calls: list[dict] = []
 
-    async def complete(messages, response_format, *, name, metadata=None, model=None):
+    async def complete(messages, response_format, *, name, metadata=None, model=None, estimated_input_tokens=None):
         calls.append({"name": name, "messages": messages, "model": model, "metadata": metadata})
         script = scripts[min(len(calls) - 1, len(scripts) - 1)]
         return LLMResult(

@@ -15,6 +15,7 @@ import uuid
 from contextlib import contextmanager
 from contextvars import ContextVar
 
+import structlog
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
@@ -60,11 +61,101 @@ def setup_observability(app) -> None:
     logger.setLevel(settings.LOG_LEVEL)
     logger.propagate = False
     app.add_middleware(RequestIdMiddleware)
+    configure_call_logs()
 
 
 def log_event(event: str, **fields) -> None:
     """Una línea JSON en stdout. No abre una traza."""
     logger.info(event, extra={"event": {"event": event, **fields}})
+
+
+def _bind_request_id(_logger, _method, event_dict):
+    event_dict["request_id"] = request_id_var.get()
+    return event_dict
+
+
+def configure_call_logs() -> None:
+    """Sesión 3 · logs: consola legible o JSON, con el mismo interruptor de siempre."""
+    settings = get_settings()
+    renderer = (
+        structlog.processors.JSONRenderer(ensure_ascii=False)
+        if settings.LOG_FORMAT == "json"
+        else structlog.dev.ConsoleRenderer()
+    )
+    structlog.configure(
+        processors=[
+            structlog.processors.add_log_level,
+            structlog.processors.TimeStamper(fmt="iso", utc=True),
+            _bind_request_id,
+            renderer,
+        ],
+        wrapper_class=structlog.make_filtering_bound_logger(getattr(logging, settings.LOG_LEVEL)),
+        cache_logger_on_first_use=False,
+    )
+
+
+def _call_logger():
+    return structlog.get_logger("estimador.llm")
+
+
+def log_llm_started(*, model: str, provider: str, tokens_in: int | None, cache_hit: bool, attempt: int = 1) -> None:
+    """Sesión 3 · logs: una línea al empezar la llamada, también si sale de caché."""
+    _call_logger().info(
+        "llm_call_started",
+        model=model,
+        provider=provider,
+        tokens_in=tokens_in,
+        cache_hit=cache_hit,
+        attempt=attempt,
+    )
+
+
+def log_llm_completed(
+    *,
+    model: str,
+    provider: str,
+    tokens_in: int,
+    tokens_out: int,
+    latency_ms: float,
+    cost_usd: float | None,
+    finish_reason: str | None,
+    fallback_used: bool,
+    cache_hit: bool,
+) -> None:
+    """Sesión 3 · logs: una línea al terminar, con el modelo que contestó."""
+    _call_logger().info(
+        "llm_call_completed",
+        model=model,
+        provider=provider,
+        tokens_in=tokens_in,
+        tokens_out=tokens_out,
+        latency_ms=round(latency_ms, 2),
+        cost_usd=cost_usd,
+        finish_reason=finish_reason,
+        fallback_used=fallback_used,
+        cache_hit=cache_hit,
+    )
+
+
+def log_llm_failed(
+    *,
+    model: str,
+    provider: str,
+    error_type: str,
+    will_fallback: bool,
+    attempt: int,
+    latency_ms: float,
+) -> None:
+    """Sesión 3 · logs: una línea si la llamada falla. El reintento del SDK no se cuenta."""
+    _call_logger().error(
+        "llm_call_failed",
+        model=model,
+        provider=provider,
+        error_type=error_type,
+        will_fallback=will_fallback,
+        attempt=attempt,
+        latency_ms=round(latency_ms, 2),
+    )
 
 
 # --- Trazas de Langfuse. Quien llama no tiene que comprobar si hay claves. ---
