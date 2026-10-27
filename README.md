@@ -179,7 +179,7 @@ Cliente
 
 El router no construye prompts ni traduce errores del modelo. Esos errores salen como `ServiceError` y `main.py` los convierte en HTTP. El estado de las conversaciones vive en `app/state/`, fuera del servicio.
 
-Un worker. El historial está en la memoria del proceso y se pierde al reiniciar. Varios workers tendrían memorias distintas.
+Un worker. El historial y la caché de respuestas están en la memoria del proceso y se pierden al reiniciar. La caché devuelve la misma estimación si coinciden la transcripción, el modelo, la temperatura, la versión del prompt y el historial, durante 24 horas, y no llama al modelo. Varios workers tendrían memorias distintas.
 
 ## Dónde se ajusta el funcionamiento
 

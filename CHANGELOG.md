@@ -6,6 +6,7 @@ El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y e
 
 ### Añadido
 
+- La caché de respuestas guarda en memoria, 24 horas, la estimación de una petición idéntica (transcripción, modelo, temperatura, versión del prompt e historial). Un acierto no llama al modelo y la respuesta lo marca en `cache_hit`.
 - `LLM_ROUTING=complexity` elige el modelo antes de estimar. Solo una transcripción corta, sin historial y con un requisito técnico como mucho, pasa a `LLM_FALLBACK_MODEL`. El defecto sigue siendo `off`.
 - Si `LLM_FALLBACK_MODEL` está definido, una llamada que falla por timeout, corte de conexión, 429, 5xx o un 400 de formato se repite una vez con ese modelo. La respuesta publica el modelo que contestó. 401, 403 y el resto de 400 no cambian de modelo.
 - `experiments/CONCLUSIONES.md` recoge la corrida del 26 de octubre de 2026, la estrategia elegida y cómo se comparó con los rangos esperados. El README indica ese archivo como lectura de la revisión.

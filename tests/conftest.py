@@ -18,14 +18,17 @@ from fastapi.testclient import TestClient
 from app.config import get_settings
 from app.main import app
 from app.services.llm_client import LLMResult
+from app.state.response_cache import clear_response_cache
 from tests.llm_fakes import estimation_turn
 
 
 @pytest.fixture(autouse=True)
 def _clear_settings_cache():
     get_settings.cache_clear()
+    clear_response_cache()
     yield
     get_settings.cache_clear()
+    clear_response_cache()
 
 
 @pytest.fixture

@@ -59,6 +59,7 @@ def _turn_response(conversation_id: str, turn: int, result, state: ConversationS
         usage=result.usage,
         cost_usd=result.cost_usd,
         latency_ms=result.latency_ms,
+        cache_hit=result.cache_hit,
         trace_id=result.trace_id,
     )
 

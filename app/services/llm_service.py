@@ -56,6 +56,7 @@ from app.services.prompt_builder import (
     system_text_of,
 )
 from app.state.conversations import select_history
+from app.state.response_cache import cache_key, lookup, store
 from app.tokens import CACHE_MIN_TOKENS, build_token_budget
 
 GATEWAY = "litellm"
@@ -125,6 +126,7 @@ class TurnResult:
     model: str
     provider: str
     trace_id: str | None
+    cache_hit: bool = False
     dropped_turns: int = 0
     repairs: int = 0
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
@@ -145,6 +147,7 @@ class TurnResult:
             usage=self.usage,
             cost_usd=self.cost_usd,
             latency_ms=self.latency_ms,
+            cache_hit=self.cache_hit,
             trace_id=self.trace_id,
             created_at=self.created_at,
         )
@@ -277,9 +280,32 @@ async def _generate(
         "prompt_version": version,
         "examples": ",".join(block.included_ids),
     }
-    first = await llm_client.complete(
-        messages, response_format, name="generate-estimate", metadata=metadata, model=model
+    # Sesión 3 · caché: la clave incluye el historial para no mezclar turnos.
+    key = cache_key(
+        transcription=transcription,
+        model=model,
+        temperature=settings.LLM_TEMPERATURE,
+        prompt_version=version,
+        history=history,
     )
+    cached = lookup(key)
+    if cached is None:
+        first = await llm_client.complete(
+            messages, response_format, name="generate-estimate", metadata=metadata, model=model
+        )
+    else:
+        first = llm_client.LLMResult(
+            content=cached.content,
+            model=cached.model,
+            finish_reason=cached.finish_reason,
+            input_tokens=0,
+            output_tokens=0,
+            total_tokens=0,
+            cached_tokens=0,
+            cache_creation_tokens=None,
+            cost_usd=0,
+            latency_ms=0,
+        )
     _require_complete(first)
     repairs = 0
     answered = first
@@ -314,6 +340,9 @@ async def _generate(
             cost = (cost or 0) + second.cost_usd
         answered = second
 
+    if cached is None:
+        store(key, content=answered.content, model=answered.model, finish_reason=answered.finish_reason)
+
     estimation = None
     warnings: list[ValidationIssue] = []
     markdown = None
@@ -346,6 +375,7 @@ async def _generate(
         model=answered.model,
         provider=derive_provider(answered.model),
         trace_id=current_trace_id(),  # Observabilidad: None si Langfuse está apagado.
+        cache_hit=cached is not None,
         dropped_turns=dropped,
         repairs=repairs,
     )
@@ -430,6 +460,7 @@ def _log(result: TurnResult, log_prompts: bool, transcription: str, messages: li
         "cached_tokens": result.usage.cached_tokens,
         "cost_usd": result.cost_usd,
         "latency_ms": round(result.latency_ms, 2),
+        "cache_hit": result.cache_hit,
         "repairs": result.repairs,
         "warnings": [issue.code for issue in result.warnings],
         "dropped_turns": result.dropped_turns,
