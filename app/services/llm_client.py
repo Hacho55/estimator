@@ -86,17 +86,62 @@ def _cost_from_header(headers: object) -> float | None:
         return None
 
 
-async def complete(
+def _fallback_name(name: str) -> str:
+    """Sesión 3 · fallback: Langfuse separa la llamada al modelo de reserva."""
+    if name.endswith("-fallback"):
+        return name
+    return f"{name}-fallback"
+
+
+def _error_text(exc: Exception) -> str:
+    parts = [str(exc)]
+    body = getattr(exc, "body", None)
+    if body is not None:
+        parts.append(str(body))
+    return " ".join(parts).lower()
+
+
+def _fallback_reason(exc: Exception) -> str | None:
+    """Sesión 3 · fallback: el tipo de error decide si hay un segundo modelo.
+
+    Timeout, corte de conexión, 429 y 5xx pasan. Un 400 pasa solo si el mensaje
+    dice que ese modelo rechazó el formato. 401, 403 y el resto de 400 no pasan:
+    cambiar de modelo no los arregla.
+    """
+    if isinstance(exc, APITimeoutError):
+        return "timeout"
+    if isinstance(exc, APIConnectionError):
+        return "connection"
+    status = getattr(exc, "status_code", None)
+    if status == 429:
+        return "rate_limit"
+    if isinstance(status, int) and status >= 500:
+        return "server_error"
+    if status == 400:
+        text = _error_text(exc)
+        markers = ("response_format", "json_schema", "formato de respuesta", "response format")
+        if any(marker in text for marker in markers):
+            return "response_format"
+    return None
+
+
+def _as_service_error(exc: Exception) -> LLMTimeoutError | LLMUnavailableError:
+    if isinstance(exc, APITimeoutError):
+        return LLMTimeoutError(f"El modelo no respondió a tiempo: {exc}")
+    return LLMUnavailableError(f"LiteLLM no pudo completar la llamada: {exc}")
+
+
+async def _request(
     messages: list[dict],
     response_format: dict,
     *,
     name: str,
-    metadata: dict | None = None,
-    model: str | None = None,
+    metadata: dict | None,
+    model: str,
 ) -> LLMResult:
     settings = get_settings()
     payload: dict = {
-        "model": model or settings.LLM_MODEL,
+        "model": model,
         "messages": _public_messages(messages),
         "temperature": settings.LLM_TEMPERATURE,
         "max_tokens": settings.LLM_MAX_TOKENS,
@@ -108,13 +153,7 @@ async def complete(
         payload["metadata"] = metadata or {}
 
     started = time.perf_counter()
-    try:
-        raw = await client.chat.completions.with_raw_response.create(**payload)
-    except APITimeoutError as exc:
-        raise LLMTimeoutError(f"El modelo no respondió a tiempo: {exc}") from exc
-    except (APIError, APIConnectionError) as exc:
-        raise LLMUnavailableError(f"LiteLLM no pudo completar la llamada: {exc}") from exc
-
+    raw = await client.chat.completions.with_raw_response.create(**payload)
     latency_ms = (time.perf_counter() - started) * 1000
     parsed = raw.parse()
     choice = parsed.choices[0]
@@ -123,7 +162,7 @@ async def complete(
     input_tokens, output_tokens, total_tokens, cached, created = _usage_details(usage)
     return LLMResult(
         content=content,
-        model=parsed.model or payload["model"],
+        model=parsed.model or model,
         finish_reason=choice.finish_reason,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
@@ -133,6 +172,37 @@ async def complete(
         cost_usd=_cost_from_header(raw.headers),
         latency_ms=latency_ms,
     )
+
+
+async def complete(
+    messages: list[dict],
+    response_format: dict,
+    *,
+    name: str,
+    metadata: dict | None = None,
+    model: str | None = None,
+) -> LLMResult:
+    settings = get_settings()
+    chosen = model or settings.LLM_MODEL
+    try:
+        return await _request(messages, response_format, name=name, metadata=metadata, model=chosen)
+    except (APITimeoutError, APIConnectionError, APIError) as exc:
+        reserve = settings.LLM_FALLBACK_MODEL.strip()
+        reason = _fallback_reason(exc)
+        # Sesión 3 · fallback: un solo intento, y solo si el reserva es otro modelo.
+        if reason and reserve and reserve != chosen:
+            fallback_metadata = {**(metadata or {}), "fallback": True, "error_type": reason}
+            try:
+                return await _request(
+                    messages,
+                    response_format,
+                    name=_fallback_name(name),
+                    metadata=fallback_metadata,
+                    model=reserve,
+                )
+            except (APITimeoutError, APIConnectionError, APIError) as second:
+                raise _as_service_error(second) from second
+        raise _as_service_error(exc) from exc
 
 
 def _public_messages(messages: list[dict]) -> list[dict]:

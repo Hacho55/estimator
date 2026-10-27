@@ -244,6 +244,7 @@ async def _generate(
     )
     _require_complete(first)
     repairs = 0
+    answered = first
     usage = _usage_from(first)
     cost = first.cost_usd
     latency = first.latency_ms
@@ -273,6 +274,7 @@ async def _generate(
         latency += second.latency_ms
         if second.cost_usd is not None:
             cost = (cost or 0) + second.cost_usd
+        answered = second
 
     estimation = None
     warnings: list[ValidationIssue] = []
@@ -302,8 +304,9 @@ async def _generate(
         usage=usage,
         cost_usd=cost,
         latency_ms=latency,
-        model=first.model,
-        provider=provider,
+        # Sesión 3 · fallback: el modelo publicado es el que contestó.
+        model=answered.model,
+        provider=derive_provider(answered.model),
         trace_id=current_trace_id(),  # Observabilidad: None si Langfuse está apagado.
         dropped_turns=dropped,
         repairs=repairs,
@@ -322,8 +325,8 @@ async def _generate(
         input_text=transcription,
         output_text=markdown or (turn.message or ""),
         metadata={
-            "model": model,
-            "provider": provider,
+            "model": answered.model,
+            "provider": derive_provider(answered.model),
             "prompt_version": version,
             "kind": turn.kind,
             "repairs": repairs,

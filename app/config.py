@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     LITELLM_API_KEY: SecretStr
     LITELLM_BASE_URL: str = "https://litellm.doi.azure.datadope.co"
     LLM_MODEL: str = "openrouter/openai/gpt-4o-mini"
+    # Sesión 3 · fallback: vacío no reserva otro modelo. Un ejemplo es
+    # openrouter/anthropic/claude-haiku-4.5, distinto del principal.
+    LLM_FALLBACK_MODEL: str = ""
 
     LLM_TEMPERATURE: float = Field(0.2, ge=0, le=2)
     LLM_MAX_TOKENS: int = Field(8000, gt=0)
