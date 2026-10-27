@@ -59,6 +59,44 @@ from app.state.conversations import select_history
 from app.tokens import CACHE_MIN_TOKENS, build_token_budget
 
 GATEWAY = "litellm"
+# Sesión 3 · routing: por debajo de esto, y con un solo requisito técnico, cabe el modelo barato.
+_SHORT_TRANSCRIPTION_CHARS = 400
+_TECHNICAL_MARKERS = (
+    "api",
+    "aplicaci",
+    "app",
+    "autentic",
+    "backend",
+    "base de datos",
+    "crm",
+    "endpoint",
+    "erp",
+    "frontend",
+    "integraci",
+    "login",
+    "movil",
+    "móvil",
+    "pago",
+    "panel",
+    "usuario",
+    "webhook",
+)
+
+
+def choose_model(transcription: str, *, has_history: bool) -> str:
+    """Sesión 3 · routing: el modelo potente es el defecto. Solo un texto corto y simple baja al reserva."""
+    settings = get_settings()
+    strong = settings.LLM_MODEL
+    cheap = settings.LLM_FALLBACK_MODEL.strip()
+    if settings.LLM_ROUTING != "complexity" or has_history or not cheap or cheap == strong:
+        return strong
+    if len(transcription) > _SHORT_TRANSCRIPTION_CHARS:
+        return strong
+    lowered = transcription.lower()
+    hits = sum(marker in lowered for marker in _TECHNICAL_MARKERS)
+    if hits > 1:
+        return strong
+    return cheap
 
 
 @dataclass
@@ -168,7 +206,7 @@ async def generate_estimation(
 ) -> TurnResult:
     settings = get_settings()
     overrides = overrides or ContextOverrides()
-    model = overrides.model or settings.LLM_MODEL
+    model = overrides.model or choose_model(transcription, has_history=bool(conversation_history))
     provider = derive_provider(model)
     # Observabilidad: etiquetas de la traza. No viajan al modelo.
     tags = [

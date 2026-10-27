@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     # Sesión 3 · fallback: vacío no reserva otro modelo. Un ejemplo es
     # openrouter/anthropic/claude-haiku-4.5, distinto del principal.
     LLM_FALLBACK_MODEL: str = ""
+    # Sesión 3 · routing: off no elige. complexity puede bajar un texto corto al reserva.
+    LLM_ROUTING: Literal["off", "complexity"] = "off"
 
     LLM_TEMPERATURE: float = Field(0.2, ge=0, le=2)
     LLM_MAX_TOKENS: int = Field(8000, gt=0)

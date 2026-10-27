@@ -66,7 +66,8 @@ Cada cambio en `.env` exige reiniciar uvicorn. La configuración se lee una vez 
 | `LITELLM_API_KEY` | sí | — | clave del proxy | Autenticación. Si falta, el proceso no arranca |
 | `LITELLM_BASE_URL` | no | proxy del curso | URL sin barra final | Dónde se envían las llamadas |
 | `LLM_MODEL` | no | `openrouter/openai/gpt-4o-mini` | nombre que entienda LiteLLM | Modelo. El proveedor sale del nombre |
-| `LLM_FALLBACK_MODEL` | no | vacío | otro nombre de LiteLLM | Un solo reintento con ese modelo si el principal agota los reintentos por timeout, corte, 429, 5xx o un 400 de formato |
+| `LLM_FALLBACK_MODEL` | no | vacío | otro nombre de LiteLLM | Un solo reintento con ese modelo si el principal agota los reintentos por timeout, corte, 429, 5xx o un 400 de formato. También es el modelo barato si `LLM_ROUTING=complexity` |
+| `LLM_ROUTING` | no | `off` | `off` o `complexity` | `complexity` manda al modelo barato solo una transcripción corta y con un requisito técnico como mucho. Ante la duda se queda en `LLM_MODEL` |
 | `LLM_TEMPERATURE` | no | `0.2` | `0` a `2` | Variación de la respuesta |
 | `LLM_MAX_TOKENS` | no | `8000` | entero mayor que 0 | Tope de la respuesta. Una estimación completa necesita varios miles |
 | `LLM_TIMEOUT_SECONDS` | no | `60` | mayor que 0 | Espera antes de responder 504 |
