@@ -45,6 +45,12 @@ uv run streamlit run streamlit_app.py
 
 Usa el mismo `.env`. La clave no va en el código.
 
+La misma conversación, con Chainlit:
+
+```bash
+uv run chainlit run chainlit_app.py
+```
+
 Comprueba que responde. `/health` debe devolver `status` igual a `healthy`, la versión y el modelo configurado:
 
 ```bash

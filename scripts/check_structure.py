@@ -47,6 +47,7 @@ REQUIRED = [
     "scripts/smoke_test.sh",
     "scripts/run_experiment.py",
     "streamlit_app.py",
+    "chainlit_app.py",
     ".github/workflows/ci.yml",
     ".agents/skills/verify-estimador/SKILL.md",
     ".agents/skills/iterate-system-prompt/SKILL.md",

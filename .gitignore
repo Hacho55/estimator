@@ -19,6 +19,9 @@ logs/
 experiments/results/*
 !experiments/results/.gitkeep
 
+.chainlit/
+.files/
+
 .DS_Store
 .idea/
 .vscode/
