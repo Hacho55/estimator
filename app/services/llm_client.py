@@ -276,11 +276,12 @@ class TokenStream:
                 _log_ok(self.result, fallback_used=False)
             return
         except (APITimeoutError, APIConnectionError, APIError) as exc:
+            failed_ms = (time.perf_counter() - started) * 1000
             _log_fail(
                 exc,
                 chosen,
                 attempt=1,
-                latency_ms=(time.perf_counter() - started) * 1000,
+                latency_ms=failed_ms,
                 will_fallback=False if emitted else None,
             )
             if emitted:
@@ -302,6 +303,7 @@ class TokenStream:
                 async for piece in self._consume(reserve, _fallback_name(self.name), fallback_metadata):
                     yield piece
                 if self.result is not None:
+                    self.result.latency_ms += failed_ms
                     _log_ok(self.result, fallback_used=True)
             except (APITimeoutError, APIConnectionError, APIError) as second:
                 _log_fail(second, reserve, attempt=2, latency_ms=(time.perf_counter() - retry) * 1000)
@@ -384,7 +386,8 @@ async def complete(
     try:
         result = await _request(messages, response_format, name=name, metadata=metadata, model=chosen)
     except (APITimeoutError, APIConnectionError, APIError) as exc:
-        _log_fail(exc, chosen, attempt=1, latency_ms=(time.perf_counter() - started) * 1000)
+        failed_ms = (time.perf_counter() - started) * 1000
+        _log_fail(exc, chosen, attempt=1, latency_ms=failed_ms)
         reserve = settings.LLM_FALLBACK_MODEL.strip()
         reason = _fallback_reason(exc)
         # Sesión 3 · fallback: un solo intento, y solo si el reserva es otro modelo.
@@ -409,6 +412,7 @@ async def complete(
             except (APITimeoutError, APIConnectionError, APIError) as second:
                 _log_fail(second, reserve, attempt=2, latency_ms=(time.perf_counter() - retry) * 1000)
                 raise _as_service_error(second) from second
+            result.latency_ms += failed_ms
             _log_ok(result, fallback_used=True)
             return result
         raise _as_service_error(exc) from exc

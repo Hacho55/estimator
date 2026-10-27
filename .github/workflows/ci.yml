@@ -48,3 +48,14 @@ jobs:
           LITELLM_API_KEY: dummy
           LITELLM_BASE_URL: https://example.invalid
           LLM_MODEL: openrouter/openai/gpt-4o-mini
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Front
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+          node --experimental-strip-types --test lib/readEstimateStream.test.ts

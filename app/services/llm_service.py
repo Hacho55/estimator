@@ -43,6 +43,7 @@ from app.services.errors import (
 )
 from app.services.postprocessor import (
     parse_turn,
+    preview_markdown,
     render_markdown,
     to_history_content,
     validate_and_fix,
@@ -353,10 +354,10 @@ def _prepare(
 
 
 class EstimationStream:
-    """Sesión 3 · streaming: un acierto sale entero. Si no, llegan los trozos del modelo.
+    """Sesión 3 · streaming: un acierto sale entero. Si no, cada entrega es el markdown visible.
 
-    Al terminar, `result` es la estimación ya validada. El texto emitido es el JSON
-    del modelo; el markdown queda en el resultado.
+    El modelo sigue mandando JSON. Aquí se traduce antes de salir. Al terminar,
+    `result` es la estimación ya validada.
     """
 
     def __init__(
@@ -405,8 +406,9 @@ class EstimationStream:
             if prepared.cached is not None:
                 self.from_cache = True
                 _log_cache_hit(prepared.cached, prepared.budget.total_input)
-                yield prepared.cached.content
                 first = _cached_result(prepared.cached)
+                self.result = await _assemble(first, prepared, transcription=self.transcription, model=model)
+                yield self.result.estimation_markdown or self.result.message or ""
             else:
                 tokens = llm_client.TokenStream(
                     prepared.messages,
@@ -416,12 +418,18 @@ class EstimationStream:
                     model=model,
                     estimated_input_tokens=prepared.budget.total_input,
                 )
+                raw = ""
+                shown = ""
                 async for piece in tokens:
-                    yield piece
+                    raw += piece
+                    preview = preview_markdown(raw)
+                    if preview and preview != shown:
+                        yield preview
+                        shown = preview
                 if tokens.result is None:
                     raise LLMUnavailableError("El modelo no envió una respuesta.")
                 first = tokens.result
-            self.result = await _assemble(first, prepared, transcription=self.transcription, model=model)
+                self.result = await _assemble(first, prepared, transcription=self.transcription, model=model)
 
 
 def stream_estimation(

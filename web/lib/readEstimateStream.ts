@@ -1,4 +1,4 @@
-/** Sesión 3 · front: lee el POST SSE. El navegador no usa EventSource porque el cuerpo no cabe en la URL. */
+/** Sesión 3 · front: lee el POST SSE. Cada token trae el markdown visible hasta ese momento. */
 
 export type EstimatePayload = {
   estimation: string;
@@ -34,30 +34,70 @@ export function takeEvents(buffer: string): { events: { event: string; data: unk
   return { events, rest };
 }
 
+export function apiBase(): string {
+  return process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
+}
+
+export function errorDetail(body: unknown): string {
+  if (!body || typeof body !== "object") return "La API no pudo abrir el stream.";
+  const detail = (body as { detail?: unknown }).detail;
+  if (typeof detail === "string" && detail) return detail;
+  if (Array.isArray(detail)) {
+    const messages = detail
+      .map((item) => {
+        if (typeof item === "string") return item;
+        if (item && typeof item === "object" && "msg" in item && typeof item.msg === "string") return item.msg;
+        return "";
+      })
+      .filter(Boolean);
+    if (messages.length > 0) return messages.join(" ");
+  }
+  return "La API no pudo abrir el stream.";
+}
+
 export async function readEstimateStream(transcription: string, handlers: StreamHandlers): Promise<void> {
-  const base = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
+  const base = apiBase();
   const response = await fetch(`${base}/api/v1/estimate/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ transcription }),
   });
   if (!response.ok || !response.body) {
-    handlers.onError("La API no pudo abrir el stream.");
+    let detail = "La API no pudo abrir el stream.";
+    try {
+      detail = errorDetail(await response.json());
+    } catch {
+      detail = "La API no pudo abrir el stream.";
+    }
+    handlers.onError(detail);
     return;
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let settled = false;
+  const wrapped: StreamHandlers = {
+    onToken: handlers.onToken,
+    onEstimate: (estimate) => {
+      settled = true;
+      handlers.onEstimate(estimate);
+    },
+    onError: (detail) => {
+      settled = true;
+      handlers.onError(detail);
+    },
+  };
   while (true) {
     const { value, done } = await reader.read();
     buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
     const parsed = takeEvents(buffer);
     buffer = parsed.rest;
-    for (const item of parsed.events) dispatch(item, handlers);
+    for (const item of parsed.events) dispatch(item, wrapped);
     if (done) break;
   }
   const tail = takeEvents(`${buffer}\n\n`);
-  for (const item of tail.events) dispatch(item, handlers);
+  for (const item of tail.events) dispatch(item, wrapped);
+  if (!settled) handlers.onError("La respuesta se cortó antes de la estimación.");
 }
 
 function dispatch(item: { event: string; data: unknown }, handlers: StreamHandlers): void {

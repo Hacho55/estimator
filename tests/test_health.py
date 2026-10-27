@@ -8,13 +8,15 @@ def test_health(client):
 
 
 def test_local_front_origin_can_call_the_api(client):
-    response = client.options(
-        "/api/v1/estimate/stream",
-        headers={
-            "Origin": "http://127.0.0.1:3000",
-            "Access-Control-Request-Method": "POST",
-            "Access-Control-Request-Headers": "content-type",
-        },
-    )
-    assert response.status_code == 200
-    assert response.headers["access-control-allow-origin"] == "http://127.0.0.1:3000"
+    for origin in ("http://127.0.0.1:3000", "http://localhost:3001"):
+        response = client.options(
+            "/api/v1/estimate/stream",
+            headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type",
+            },
+        )
+        assert response.status_code == 200
+        assert response.headers["access-control-allow-origin"] == origin
+        assert "DELETE" in response.headers["access-control-allow-methods"]

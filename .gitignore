@@ -24,6 +24,7 @@ experiments/results/*
 
 web/node_modules/
 web/.next/
+web/*.tsbuildinfo
 
 .DS_Store
 .idea/

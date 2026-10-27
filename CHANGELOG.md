@@ -19,6 +19,14 @@ El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y e
 
 ### Corregido
 
+- La latencia de un fallback incluye el intento fallido. La caché de respuestas purga lo vencido y no pasa de 256 entradas. El navegador puede borrar una conversación.
+- Streamlit y Chainlit guardan en el historial la estimación corregida, no solo el markdown visible, y no dejan un turno a medias si la llamada falla. También rechazan un texto más largo que el de la API.
+- El front distingue el error de la API, avisa si el stream se corta y recarga el contexto cuando cambia la transcripción. La tabla cabe en una pantalla estrecha.
+- Mientras el modelo escribe, Streamlit, Chainlit y el front muestran el markdown de la estimación. El JSON no se pinta. Al cerrar, sigue el texto ya validado.
+- En el front, la tabla de tareas se pinta como tabla. Tras la llamada se ven modelo, tokens, latencia y si salió de caché. El prompt y el contexto inyectado se abren con «Ver contexto».
+- Streamlit ofrece «Nueva conversación» para vaciar el chat sin recargar la página.
+- Chainlit muestra el prompt del sistema como texto. Con la caché del prefijo llegaba como lista de bloques y el panel lateral fallaba.
+- El navegador del front puede llamar a la API desde `localhost` o `127.0.0.1` en cualquier puerto. La estimación en pantalla usa la misma tipografía que el formulario.
 - El CI deja de podar la caché de uv al terminar. Ese paso fallaba con el código 2 después de que estructura, ruff, tests, arranque y presupuesto ya habían pasado.
 - El experimento llama al modelo dentro de un solo bucle de asyncio. Cada caso abría y cerraba el suyo, y la segunda llamada fallaba con `Event loop is closed`.
 

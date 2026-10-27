@@ -12,6 +12,7 @@ import time
 from dataclasses import dataclass
 
 TTL_SECONDS = 24 * 60 * 60
+MAX_ENTRIES = 256
 
 
 @dataclass
@@ -55,12 +56,23 @@ def lookup(key: str) -> CachedCompletion | None:
 
 
 def store(key: str, *, content: str, model: str, finish_reason: str | None) -> None:
+    now = time.monotonic()
+    expired = [stored for stored, entry in _entries.items() if entry.expires_at <= now]
+    for stored in expired:
+        _entries.pop(stored, None)
+    _entries.pop(key, None)
     _entries[key] = CachedCompletion(
         content=content,
         model=model,
         finish_reason=finish_reason,
-        expires_at=time.monotonic() + TTL_SECONDS,
+        expires_at=now + TTL_SECONDS,
     )
+    while len(_entries) > MAX_ENTRIES:
+        _entries.pop(next(iter(_entries)))
+
+
+def cache_size() -> int:
+    return len(_entries)
 
 
 def clear_response_cache() -> None:

@@ -50,6 +50,7 @@ REQUIRED = [
     "chainlit_app.py",
     "web/package.json",
     "web/app/page.tsx",
+    "web/app/Markdown.tsx",
     ".github/workflows/ci.yml",
     ".agents/skills/verify-estimador/SKILL.md",
     ".agents/skills/iterate-system-prompt/SKILL.md",

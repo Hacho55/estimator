@@ -7,7 +7,7 @@ import chainlit as cl
 from app.schemas.conversation import ChatMessage
 from app.services.errors import ServiceError
 from app.services.llm_service import get_context_info, preview_prompt, stream_estimation
-from streamlit_app import visible_text
+from streamlit_app import input_problem, plain_content, visible_text
 
 _SAMPLE = "Transcripción de ejemplo para mostrar el prompt del sistema, sin llamar al modelo ahora."
 
@@ -35,7 +35,7 @@ def _metrics(result) -> str:
 
 async def _show_sidebar(transcription: str, result) -> None:
     preview = preview_prompt(transcription or _SAMPLE)
-    system = next((message.content for message in preview.messages if message.role == "system"), "")
+    system = plain_content(next((message.content for message in preview.messages if message.role == "system"), ""))
     context = get_context_info(include_text=True)
     await cl.ElementSidebar.set_title("Contexto")
     await cl.ElementSidebar.set_elements(
@@ -56,8 +56,9 @@ async def start() -> None:
 async def on_message(message: cl.Message) -> None:
     history: list[ChatMessage] = cl.user_session.get("history") or []
     text = message.content or ""
-    if not history and len(text.strip()) < 50:
-        await cl.Message(content="La primera transcripción necesita al menos 50 caracteres.").send()
+    problem = input_problem(text, first=not history)
+    if problem:
+        await cl.Message(content=problem).send()
         return
 
     outgoing = cl.Message(content="")
@@ -65,15 +66,21 @@ async def on_message(message: cl.Message) -> None:
 
     async def on_token(piece: str) -> None:
         nonlocal started
+        outgoing.content = piece
         if not started:
             await outgoing.send()
             started = True
-        await outgoing.stream_token(piece)
+        else:
+            await outgoing.update()
 
     try:
         result = await drive_estimation(text, history, on_token)
     except ServiceError as exc:
-        await cl.Message(content=exc.message).send()
+        if started:
+            outgoing.content = exc.message
+            await outgoing.update()
+        else:
+            await cl.Message(content=exc.message).send()
         return
 
     final = visible_text(result)
@@ -83,7 +90,14 @@ async def on_message(message: cl.Message) -> None:
         outgoing.content = final
         await outgoing.update()
 
-    history.append(ChatMessage(role="user", content=text))
-    history.append(ChatMessage(role="assistant", content=final))
+    history.append(ChatMessage(role="user", content=text, kind="estimation" if not history else None, anchor=not history))
+    history.append(
+        ChatMessage(
+            role="assistant",
+            content=result.history_content,
+            kind=result.kind,
+            anchor=result.kind in {"estimation", "estimation_update"},
+        )
+    )
     cl.user_session.set("history", history)
     await _show_sidebar(text, result)

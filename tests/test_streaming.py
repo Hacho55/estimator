@@ -120,7 +120,7 @@ async def test_cache_hit_yields_the_stored_text_once(client, fake_llm, monkeypat
     monkeypatch.setattr(llm_client.client.chat.completions, "create", create)
     stream = stream_estimation(TRANSCRIPTION)
     pieces = [piece async for piece in stream]
-    assert pieces == [estimation_turn()]
+    assert pieces == [stream.result.estimation_markdown]
     assert stream.result is not None
     assert stream.result.cache_hit is True
     assert stream.result.estimation_markdown.startswith("## Estimación:")
@@ -136,14 +136,16 @@ async def test_streamed_estimate_is_cached_for_the_next_call(monkeypatch):
     )
     stream = stream_estimation(TRANSCRIPTION)
     pieces = [piece async for piece in stream]
-    assert "".join(pieces) == body
+    assert pieces
+    assert all("{" not in piece and "project_title" not in piece for piece in pieces)
+    assert pieces[-1].startswith("## Estimación:")
     assert stream.result is not None
     assert stream.result.cache_hit is False
     assert stream.result.estimation.total_hours == 100
 
     again = stream_estimation(TRANSCRIPTION)
     cached_pieces = [piece async for piece in again]
-    assert cached_pieces == [body]
+    assert cached_pieces == [again.result.estimation_markdown]
     assert again.result is not None
     assert again.result.cache_hit is True
     assert len(calls) == 1

@@ -99,7 +99,7 @@ def _estimate_event(result) -> dict:
     responses=_ERRORS,
 )
 async def estimate_stream(request: EstimationRequest):
-    """Sesión 3 · sse: trozos para quien no habla con Python. El POST completo no cambia."""
+    """Sesión 3 · sse: cada token es el markdown visible. El POST completo no cambia."""
     stream = stream_estimation(request.transcription)
     try:
         async for piece in stream:

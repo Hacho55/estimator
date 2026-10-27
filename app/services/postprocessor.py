@@ -207,6 +207,148 @@ def validate_and_fix(
     return Estimation.model_validate(data), issues
 
 
+def preview_markdown(raw: str) -> str:
+    """Sesión 3 · streaming: el texto visible mientras el JSON del modelo aún no cerró."""
+    data = _loads_partial(raw)
+    if not isinstance(data, dict):
+        return ""
+    estimation = data.get("estimation")
+    if data.get("kind") == "answer" or not isinstance(estimation, dict):
+        message = data.get("message")
+        return message if isinstance(message, str) else ""
+    return _render_partial_estimation(estimation)
+
+
+def _loads_partial(text: str) -> dict | None:
+    start = text.find("{")
+    if start < 0:
+        return None
+    body = text[start:]
+    for drop in range(40):
+        candidate = body if drop == 0 else body[:-drop]
+        candidate = candidate.rstrip().rstrip(",")
+        if not candidate:
+            return None
+        try:
+            value = json.loads(_repair_json(candidate))
+        except json.JSONDecodeError:
+            continue
+        return value if isinstance(value, dict) else None
+    return None
+
+
+def _repair_json(text: str) -> str:
+    trimmed = text.rstrip()
+    stack: list[str] = []
+    in_string = False
+    escape = False
+    for char in trimmed:
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            stack.append("}")
+        elif char == "[":
+            stack.append("]")
+        elif char in "}]" and stack and stack[-1] == char:
+            stack.pop()
+    if escape:
+        trimmed += "\\"
+    if in_string:
+        trimmed += '"'
+    elif trimmed.endswith(":"):
+        trimmed += " null"
+    elif trimmed.endswith(","):
+        trimmed = trimmed[:-1]
+    return trimmed + "".join(reversed(stack))
+
+
+def _shown_number(value: object) -> str:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return ""
+    return f"{value:g}"
+
+
+def _render_partial_estimation(estimation: dict) -> str:
+    lines: list[str] = []
+    title = estimation.get("project_title")
+    if isinstance(title, str) and title:
+        lines.extend([f"## Estimación: {title}", ""])
+    summary = estimation.get("summary")
+    if isinstance(summary, str) and summary:
+        lines.extend([summary, ""])
+    if estimation.get("is_estimable") is False:
+        reason = estimation.get("not_estimable_reason") or "sin motivo."
+        lines.append(f"No estimable: {reason}")
+        return "\n".join(lines).rstrip()
+
+    tasks = estimation.get("tasks")
+    if isinstance(tasks, list):
+        rows = [task for task in tasks if isinstance(task, dict) and isinstance(task.get("name"), str) and task.get("name")]
+        if rows:
+            lines.extend(
+                [
+                    "### Desglose de tareas",
+                    "",
+                    "| Tarea | Fase | Rol | Horas | EUR/h | Coste |",
+                    "| --- | --- | --- | --- | --- | --- |",
+                ]
+            )
+            for task in rows:
+                lines.append(
+                    "| {name} | {phase} | {role} | {hours} | {rate} | {cost} |".format(
+                        name=task.get("name") or "",
+                        phase=task.get("phase") if isinstance(task.get("phase"), str) else "",
+                        role=task.get("role") if isinstance(task.get("role"), str) else "",
+                        hours=_shown_number(task.get("hours")),
+                        rate=_shown_number(task.get("rate_eur")),
+                        cost=_shown_number(task.get("cost_eur")),
+                    )
+                )
+            lines.append("")
+
+    hours = _shown_number(estimation.get("total_hours"))
+    cost = _shown_number(estimation.get("total_cost_eur"))
+    if hours or cost:
+        lines.extend([f"**Total estimado: {hours} horas, {cost} EUR**", ""])
+
+    team = estimation.get("team")
+    if isinstance(team, list) and any(isinstance(member, dict) and member.get("role") for member in team):
+        lines.append("### Equipo recomendado")
+        for member in team:
+            if not isinstance(member, dict) or not isinstance(member.get("role"), str):
+                continue
+            count = _shown_number(member.get("count"))
+            dedication = _shown_number(member.get("dedication"))
+            lines.append(f"- {count} {member['role']} (dedicación {dedication})".strip())
+        lines.append("")
+
+    low = _shown_number(estimation.get("duration_weeks_min"))
+    high = _shown_number(estimation.get("duration_weeks_max"))
+    if low or high:
+        lines.extend(["### Duración estimada", f"{low}-{high} semanas", ""])
+
+    assumptions = estimation.get("assumptions")
+    if isinstance(assumptions, list) and any(isinstance(item, str) and item for item in assumptions):
+        lines.append("### Supuestos")
+        lines.extend(f"- {item}" for item in assumptions if isinstance(item, str) and item)
+        lines.append("")
+
+    risks = estimation.get("risks")
+    if isinstance(risks, list) and any(isinstance(item, str) and item for item in risks):
+        lines.append("### Riesgos")
+        lines.extend(f"- {item}" for item in risks if isinstance(item, str) and item)
+
+    return "\n".join(lines).rstrip()
+
+
 def render_markdown(estimation: Estimation) -> str:
     lines = [f"## Estimación: {estimation.project_title}", "", estimation.summary, ""]
     if not estimation.is_estimable:

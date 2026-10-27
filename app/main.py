@@ -28,11 +28,11 @@ app = FastAPI(
     lifespan=lifespan,
 )
 setup_observability(app)  # Observabilidad: logs JSON y cabecera x-request-id.
-# Sesión 3 · front: el navegador en :3000 llama al SSE. Sin esto el preflight falla.
+# Sesión 3 · front: Next puede caer en otro puerto si el 3000 está ocupado.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?$",
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["content-type"],
 )
 app.include_router(estimations.router)

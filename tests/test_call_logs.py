@@ -8,9 +8,10 @@ from app.observability import configure_call_logs
 from app.services import llm_client
 from app.services.errors import LLMUnavailableError
 from app.services.llm_service import stream_estimation
-from tests.llm_fakes import estimation_turn
 from tests.test_estimate import TRANSCRIPTION
 from tests.test_fallback import PRIMARY, RESERVE, _install, _request, _status
+from tests.test_streaming import _chunk, _usage
+from tests.test_streaming import _install as install_stream
 
 MESSAGES = [{"role": "user", "content": "hola"}]
 RESPONSE_FORMAT = {"type": "json_object"}
@@ -20,6 +21,16 @@ def _info_logs(monkeypatch) -> None:
     monkeypatch.setenv("LOG_LEVEL", "INFO")
     get_settings.cache_clear()
     configure_call_logs()
+
+
+async def test_a_stream_logs_start_and_completion(monkeypatch):
+    _info_logs(monkeypatch)
+    install_stream(monkeypatch, [[_chunk("hola", finish="stop", usage=_usage())]])
+    with capture_logs() as logs:
+        pieces = [piece async for piece in llm_client.TokenStream(MESSAGES, RESPONSE_FORMAT, name="generate-estimate")]
+    assert pieces == ["hola"]
+    assert [item["event"] for item in logs] == ["llm_call_started", "llm_call_completed"]
+    assert logs[1]["fallback_used"] is False
 
 
 async def test_a_successful_call_logs_start_and_completion(monkeypatch):
@@ -80,7 +91,7 @@ async def test_cache_hit_is_logged_without_a_second_model_call(client, fake_llm,
     with capture_logs() as logs:
         stream = stream_estimation(TRANSCRIPTION)
         pieces = [piece async for piece in stream]
-    assert pieces == [estimation_turn()]
+    assert pieces == [stream.result.estimation_markdown]
     assert len(fake_llm["calls"]) == 1
     completed = [item for item in logs if item["event"] == "llm_call_completed"]
     assert completed[-1]["cache_hit"] is True

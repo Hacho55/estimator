@@ -3,7 +3,7 @@
 from types import SimpleNamespace
 
 from app.services.errors import ServiceError
-from streamlit_app import open_reply, visible_text
+from streamlit_app import input_problem, open_reply, plain_content, remembered_turn, turn_for_model, visible_text
 
 
 class _FakeResult:
@@ -30,6 +30,37 @@ class _FakeStream:
         for piece in self._pieces:
             yield piece
         self.result = self._result
+
+
+def test_chat_history_keeps_the_corrected_estimate_for_the_model():
+    visible = "## Estimación: Panel"
+    stored = remembered_turn(
+        role="assistant",
+        display=visible,
+        model_content='{"kind":"estimation"}',
+        kind="estimation",
+        anchor=True,
+    )
+    message = turn_for_model(stored)
+    assert stored["content"] == visible
+    assert message.content == '{"kind":"estimation"}'
+    assert message.kind == "estimation"
+    assert message.anchor is True
+
+
+def test_input_problem_matches_the_api_limits():
+    assert input_problem("corto", first=True) == "La primera transcripción necesita al menos 50 caracteres."
+    assert input_problem("x" * 40_001, first=False) == "El texto supera los 40000 caracteres."
+    assert input_problem("x" * 50, first=True) is None
+
+
+def test_cached_prompt_blocks_become_plain_text():
+    blocks = [
+        {"type": "text", "text": "Rol."},
+        {"type": "text", "text": "Formato.", "cache_control": {"type": "ephemeral"}},
+    ]
+    assert plain_content(blocks) == "Rol.\nFormato."
+    assert plain_content("ya es texto") == "ya es texto"
 
 
 def test_cache_hit_returns_the_markdown_without_a_token_generator(monkeypatch):

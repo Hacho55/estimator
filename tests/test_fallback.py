@@ -134,6 +134,20 @@ async def test_reserve_failure_surfaces_the_service_error(monkeypatch):
     assert calls[1]["name"] == "repair-estimate-fallback"
 
 
+async def test_fallback_latency_includes_the_failed_attempt(monkeypatch):
+    _enable_reserve(monkeypatch)
+    clock = {"now": 0.0}
+
+    def tick() -> float:
+        clock["now"] += 0.05
+        return clock["now"]
+
+    monkeypatch.setattr("app.services.llm_client.time.perf_counter", tick)
+    _install(monkeypatch, [APITimeoutError(request=_request()), RESERVE])
+    result = await llm_client.complete(MESSAGES, RESPONSE_FORMAT, name="generate-estimate")
+    assert result.latency_ms >= 100
+
+
 async def test_empty_reserve_does_not_retry(monkeypatch):
     get_settings.cache_clear()
     calls = _install(monkeypatch, [APITimeoutError(request=_request()), RESERVE])

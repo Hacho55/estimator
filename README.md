@@ -51,7 +51,7 @@ La misma conversación, con Chainlit:
 uv run chainlit run chainlit_app.py
 ```
 
-El front, en otra carpeta, consume el stream de la API. Primero tiene que estar uvicorn en el puerto 8000:
+El front, en otra carpeta, consume el stream de la API. Primero tiene que estar uvicorn en el puerto 8000. Si el 3000 está ocupado, Next elige otro; la API acepta `localhost` y `127.0.0.1` en el puerto que salga:
 
 ```bash
 cd web && npm install && npm run dev
@@ -132,6 +132,7 @@ El SDK instalado es Langfuse Python 5, el vigente para Langfuse Cloud v4. `APP_E
 | --- | --- | --- |
 | GET | `/health` | Estado del proceso |
 | POST | `/api/v1/estimate` | Una transcripción, una estimación |
+| POST | `/api/v1/estimate/stream` | La misma petición, en eventos `token` y `estimate` |
 | GET | `/api/v1/context` | Ejemplos usados, presupuesto y caché |
 | POST | `/api/v1/estimate/preview` | Prompt completo, sin llamar al modelo. Solo con `APP_ENV=development` |
 | POST | `/api/v1/conversations` | Empieza una conversación con la transcripción |
@@ -139,7 +140,7 @@ El SDK instalado es Langfuse Python 5, el vigente para Langfuse Cloud v4. `APP_E
 | GET | `/api/v1/conversations/{id}` | Historial |
 | DELETE | `/api/v1/conversations/{id}` | Borra la conversación |
 
-El cuerpo de `POST /api/v1/estimate` y de `POST /api/v1/conversations` es `{"transcription": "..."}`. El de un mensaje siguiente es `{"message": "..."}`. `POST /api/v1/estimate/stream` usa el mismo cuerpo y responde con eventos: `token` mientras el modelo escribe y `estimate` al cerrar. Un acierto de caché manda solo `estimate`.
+El cuerpo de `POST /api/v1/estimate` y de `POST /api/v1/conversations` es `{"transcription": "..."}`. El de un mensaje siguiente es `{"message": "..."}`. `POST /api/v1/estimate/stream` usa el mismo cuerpo y responde con eventos: cada `token` es el markdown visible hasta ese momento y `estimate` cierra. Un acierto de caché manda solo `estimate`.
 
 Ver el contexto que se inyectaría, sin gastar una llamada:
 
@@ -199,7 +200,7 @@ Cliente
 
 El router no construye prompts ni traduce errores del modelo. Esos errores salen como `ServiceError` y `main.py` los convierte en HTTP. El estado de las conversaciones vive en `app/state/`, fuera del servicio.
 
-Un worker. El historial y la caché de respuestas están en la memoria del proceso y se pierden al reiniciar. La caché devuelve la misma estimación si coinciden la transcripción, el modelo, la temperatura, la versión del prompt y el historial, durante 24 horas, y no llama al modelo. Varios workers tendrían memorias distintas. Quien itera `stream_estimation` ve los trozos del modelo; un acierto de caché llega de una vez. `POST /api/v1/estimate` sigue esperando la estimación completa.
+Un worker. El historial y la caché de respuestas están en la memoria del proceso y se pierden al reiniciar. La caché devuelve la misma estimación si coinciden la transcripción, el modelo, la temperatura, la versión del prompt y el historial, durante 24 horas, y no llama al modelo. Varios workers tendrían memorias distintas. Quien itera `stream_estimation` ve el markdown ya formateado, actualizado con cada trozo; un acierto de caché llega de una vez. `POST /api/v1/estimate` sigue esperando la estimación completa.
 
 ## Dónde se ajusta el funcionamiento
 

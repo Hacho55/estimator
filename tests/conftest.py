@@ -9,6 +9,8 @@ os.environ["LANGFUSE_PUBLIC_KEY"] = ""
 os.environ["LANGFUSE_SECRET_KEY"] = ""
 os.environ["LANGFUSE_TRACING_ENABLED"] = "false"
 os.environ["LLM_MODEL"] = "openrouter/openai/gpt-4o-mini"
+os.environ["LLM_FALLBACK_MODEL"] = ""
+os.environ["LLM_ROUTING"] = "off"
 os.environ["LOG_LEVEL"] = "WARNING"
 os.environ["LOG_PROMPTS"] = "false"
 

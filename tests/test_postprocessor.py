@@ -5,6 +5,7 @@ import pytest
 from app.services.errors import InvalidLLMOutputError
 from app.services.postprocessor import (
     parse_turn,
+    preview_markdown,
     render_markdown,
     to_history_content,
     validate_and_fix,
@@ -74,3 +75,16 @@ def test_not_estimable_is_a_warning_and_history_stores_the_corrected_version():
     stored = json.loads(to_history_content(turn, estimation))
     assert stored["estimation"]["is_estimable"] is False
     assert "No estimable" in render_markdown(estimation)
+
+
+def test_a_partial_response_renders_as_markdown():
+    raw = estimation_turn()
+    cut = raw[: raw.index("Landing") + 3]
+    shown = preview_markdown(cut)
+    assert shown.startswith("## Estimación: Lan")
+    assert "{" not in shown
+    assert "project_title" not in shown
+    full = preview_markdown(raw)
+    assert "Maquetación" in full
+    assert "Supuestos" in full
+    assert "{" not in full
