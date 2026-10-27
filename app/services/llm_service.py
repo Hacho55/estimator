@@ -130,6 +130,7 @@ class TurnResult:
     provider: str
     trace_id: str | None
     cache_hit: bool = False
+    finish_reason: str | None = None
     dropped_turns: int = 0
     repairs: int = 0
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
@@ -551,6 +552,7 @@ async def _assemble(first: llm_client.LLMResult, prepared: _Prepared, *, transcr
         provider=derive_provider(answered.model),
         trace_id=current_trace_id(),  # Observabilidad: None si Langfuse está apagado.
         cache_hit=cached is not None,
+        finish_reason=answered.finish_reason,
         dropped_turns=dropped,
         repairs=repairs,
     )

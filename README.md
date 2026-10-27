@@ -133,7 +133,7 @@ El SDK instalado es Langfuse Python 5, el vigente para Langfuse Cloud v4. `APP_E
 | GET | `/api/v1/conversations/{id}` | Historial |
 | DELETE | `/api/v1/conversations/{id}` | Borra la conversación |
 
-El cuerpo de `POST /api/v1/estimate` y de `POST /api/v1/conversations` es `{"transcription": "..."}`. El de un mensaje siguiente es `{"message": "..."}`.
+El cuerpo de `POST /api/v1/estimate` y de `POST /api/v1/conversations` es `{"transcription": "..."}`. El de un mensaje siguiente es `{"message": "..."}`. `POST /api/v1/estimate/stream` usa el mismo cuerpo y responde con eventos: `token` mientras el modelo escribe y `estimate` al cerrar. Un acierto de caché manda solo `estimate`.
 
 Ver el contexto que se inyectaría, sin gastar una llamada:
 

@@ -1,6 +1,7 @@
 """Endpoints de estimación, diagnóstico de contexto y conversación."""
 
 from fastapi import APIRouter, HTTPException
+from fastapi.sse import EventSourceResponse, ServerSentEvent
 
 from app.config import get_settings
 from app.schemas.context import ContextInfo
@@ -18,7 +19,8 @@ from app.schemas.estimation import (
     EstimationResponse,
     PromptPreview,
 )
-from app.services.llm_service import generate_estimation, get_context_info, preview_prompt
+from app.services.errors import ServiceError
+from app.services.llm_service import generate_estimation, get_context_info, preview_prompt, stream_estimation
 from app.state.conversations import get_store
 
 router = APIRouter(prefix="/api/v1", tags=["estimations"])
@@ -73,6 +75,44 @@ def _turn_response(conversation_id: str, turn: int, result, state: ConversationS
 async def estimate(request: EstimationRequest) -> EstimationResponse:
     result = await generate_estimation(request.transcription)
     return result.to_estimation_response()
+
+
+def _estimate_event(result) -> dict:
+    usage = result.usage
+    return {
+        "estimation": result.estimation_markdown,
+        "model": result.model,
+        "provider": result.provider,
+        "input_tokens": usage.input_tokens,
+        "output_tokens": usage.output_tokens,
+        "latency_ms": result.latency_ms,
+        "finish_reason": result.finish_reason,
+        "cache_hit": result.cache_hit,
+        "prompt_version": result.prompt_version,
+    }
+
+
+@router.post(
+    "/estimate/stream",
+    operation_id="stream_estimate",
+    response_class=EventSourceResponse,
+    responses=_ERRORS,
+)
+async def estimate_stream(request: EstimationRequest):
+    """Sesión 3 · sse: trozos para quien no habla con Python. El POST completo no cambia."""
+    stream = stream_estimation(request.transcription)
+    try:
+        async for piece in stream:
+            if stream.from_cache:
+                continue
+            yield ServerSentEvent(data=piece, event="token")
+        result = stream.result
+        if result is None:
+            yield ServerSentEvent(data={"error": "service_error", "detail": "Sin estimación."}, event="error")
+            return
+        yield ServerSentEvent(data=_estimate_event(result), event="estimate")
+    except ServiceError as exc:
+        yield ServerSentEvent(data={"error": exc.code, "detail": exc.message}, event="error")
 
 
 @router.post(

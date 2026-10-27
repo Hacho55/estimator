@@ -6,6 +6,7 @@ El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y e
 
 ### Añadido
 
+- `POST /api/v1/estimate/stream` envía cada trozo en un evento `token` y cierra con `estimate`. Un acierto de caché manda solo `estimate`. `POST /api/v1/estimate` no cambia.
 - `chainlit_app.py` ofrece la misma conversación que Streamlit: streaming, historial y si la última respuesta salió de caché.
 - `streamlit_app.py` conversa con el mismo estimador, escribe la respuesta por trozos y deja el markdown en el historial. El panel muestra el prompt, el contexto y, de la última llamada, modelo, tokens, latencia y si salió de caché.
 - Cada llamada al modelo deja tres posibles líneas con structlog (`llm_call_started`, `llm_call_completed`, `llm_call_failed`): modelo, proveedor, tokens, coste, latencia, `finish_reason`, si vino de caché y si entró el modelo de reserva. `LOG_FORMAT` sigue eligiendo JSON o consola. El evento `estimation` y Langfuse no cambian.
