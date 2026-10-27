@@ -371,6 +371,7 @@ class EstimationStream:
         self.overrides = overrides or ContextOverrides()
         self.session_id = session_id
         self.result: TurnResult | None = None
+        self.from_cache = False
 
     def __aiter__(self):
         return self._iterate()
@@ -401,6 +402,7 @@ class EstimationStream:
                 provider=provider,
             )
             if prepared.cached is not None:
+                self.from_cache = True
                 _log_cache_hit(prepared.cached, prepared.budget.total_input)
                 yield prepared.cached.content
                 first = _cached_result(prepared.cached)

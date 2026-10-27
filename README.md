@@ -37,6 +37,14 @@ uv run uvicorn app.main:app --reload
 
 Queda en `http://127.0.0.1:8000`. Para pararlo, `Ctrl+C` en esa terminal.
 
+La interfaz de conversación no necesita ese proceso:
+
+```bash
+uv run streamlit run streamlit_app.py
+```
+
+Usa el mismo `.env`. La clave no va en el código.
+
 Comprueba que responde. `/health` debe devolver `status` igual a `healthy`, la versión y el modelo configurado:
 
 ```bash

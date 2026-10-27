@@ -6,6 +6,7 @@ El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y e
 
 ### Añadido
 
+- `streamlit_app.py` conversa con el mismo estimador, escribe la respuesta por trozos y deja el markdown en el historial. El panel muestra el prompt, el contexto y, de la última llamada, modelo, tokens, latencia y si salió de caché.
 - Cada llamada al modelo deja tres posibles líneas con structlog (`llm_call_started`, `llm_call_completed`, `llm_call_failed`): modelo, proveedor, tokens, coste, latencia, `finish_reason`, si vino de caché y si entró el modelo de reserva. `LOG_FORMAT` sigue eligiendo JSON o consola. El evento `estimation` y Langfuse no cambian.
 - El cliente puede entregar la respuesta del modelo por trozos. Un acierto de caché sale de una vez. Si el stream se corta antes del primer token, vale el modelo de reserva; si ya empezó, no se cambia a mitad. `finish_reason=length` sigue sin guardarse en la caché. `POST /api/v1/estimate` no cambia.
 - La caché de respuestas guarda en memoria, 24 horas, la estimación de una petición idéntica (transcripción, modelo, temperatura, versión del prompt e historial). Un acierto no llama al modelo y la respuesta lo marca en `cache_hit`.
