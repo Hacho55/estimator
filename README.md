@@ -29,6 +29,13 @@ cp .env.example .env
 
 Abre `.env` y rellena al menos `LITELLM_API_KEY`. El resto tiene valores por defecto. `.env` no se versiona.
 
+Redis es opcional (caché semántica). Sin `REDIS_URL` el servicio usa un índice en memoria y sigue:
+
+```bash
+docker compose up -d redis
+# REDIS_URL=redis://127.0.0.1:6379 en .env
+```
+
 Arranca un solo worker:
 
 ```bash
@@ -37,7 +44,7 @@ uv run uvicorn app.main:app --reload
 
 Queda en `http://127.0.0.1:8000`. Para pararlo, `Ctrl+C` en esa terminal.
 
-El front, en otra carpeta, consume el stream de la API. Primero tiene que estar uvicorn en el puerto 8000. Si el 3000 está ocupado, Next elige otro; la API acepta `localhost` y `127.0.0.1` en el puerto que salga:
+El front Next abre con el formulario tipado y habla con `/api/v2` (SSE). Primero tiene que estar uvicorn en el puerto 8000. Si el 3000 está ocupado, Next elige otro; la API acepta `localhost` y `127.0.0.1` en el puerto que salga:
 
 ```bash
 cd web && npm install && npm run dev
@@ -80,6 +87,14 @@ Cada cambio en `.env` exige reiniciar uvicorn. La configuración se lee una vez 
 | `LLM_MAX_RETRIES` | no | `3` | `0` o más | Reintentos del SDK ante 408, 409, 429 y 5xx |
 | `LLM_RESPONSE_FORMAT` | no | `json_schema` | `json_schema` o `json_object` | Cómo se pide el JSON. `json_object` sirve si el modelo no acepta el esquema |
 | `LLM_PROMPT_CACHE` | no | `auto` | `auto` o `off` | `cache_control` en modelos Anthropic. OpenAI y Gemini cachean el prefijo solos |
+| `LLM_PROMPT_VERSION` | no | `v1` | carpeta en `app/prompts/estimation/` | Versión de plantilla por defecto; en v2 se puede anular por query |
+| `GUARDRAILS_MODE` | no | `log` | `log` o `enforce` | `log` registra inyecciones sin bloquear; `enforce` responde 422 |
+| `PII_SCORE_THRESHOLD` | no | `0.5` | 0 a 1 | Umbral de Presidio (si hay modelo spaCy) |
+| `REDIS_URL` | no | vacío | URL Redis | Activa redisvl para la caché semántica |
+| `SEMANTIC_CACHE_MODE` | no | `log` | `off`, `log`, `on` | `log` mide vecinos sin servirlos; `on` sirve aciertos |
+| `SEMANTIC_CACHE_THRESHOLD` | no | `0.92` | 0 a 1 | Similitud mínima (coseno) |
+| `EMBEDDING_MODEL` | no | `openrouter/openai/text-embedding-3-small` | nombre LiteLLM | Modelo de embeddings |
+| `EMBEDDING_DIMS` | no | `1536` | entero | Dimensiones del vector |
 | `APP_ENV` | no | `development` | `development`, `staging`, `production` | Entorno de Langfuse. En `production` desaparece `/estimate/preview` |
 | `APP_NAME` | no | `Estimador CAG` | texto | Nombre interno |
 | `LOG_LEVEL` | no | `DEBUG` | `DEBUG`, `INFO`, `WARNING`, `ERROR` | Verbosidad |
@@ -125,8 +140,15 @@ El SDK instalado es Langfuse Python 5, el vigente para Langfuse Cloud v4. `APP_E
 | POST | `/api/v1/conversations/{id}/messages` | Siguiente turno: ajuste o pregunta |
 | GET | `/api/v1/conversations/{id}` | Historial |
 | DELETE | `/api/v1/conversations/{id}` | Borra la conversación |
+| GET | `/api/v2/prompts` | Versiones de plantilla y la de defecto |
+| POST | `/api/v2/estimate` | Formulario tipado (`description`, `project_type`, `detail_level`, `output_format`) |
+| POST | `/api/v2/estimate/stream` | Igual, en SSE; el `estimate` lleva `estimation_structured` |
+| POST | `/api/v2/conversations` | Crea conversación con el formulario |
+| POST | `/api/v2/conversations/stream` | Igual, en SSE |
+| POST | `/api/v2/conversations/{id}/messages` | Turno de ajuste o pregunta |
+| POST | `/api/v2/conversations/{id}/messages/stream` | Turno en SSE |
 
-El cuerpo de `POST /api/v1/estimate` y de `POST /api/v1/conversations` es `{"transcription": "..."}`. El de un mensaje siguiente es `{"message": "..."}`. `POST /api/v1/estimate/stream` usa el mismo cuerpo y responde con eventos: cada `token` es el markdown visible hasta ese momento y `estimate` cierra. Un acierto de caché manda solo `estimate`.
+El cuerpo de `POST /api/v1/estimate` y de `POST /api/v1/conversations` es `{"transcription": "..."}`. El de v2 es el formulario tipado; `prompt_version` va en query. Un mensaje siguiente es `{"message": "..."}`. Los streams responden con `token` y cierran con `estimate` (o `error`). Un acierto de caché manda solo `estimate`.
 
 Ver el contexto que se inyectaría, sin gastar una llamada:
 
@@ -163,7 +185,9 @@ El contrato v1 admite campos nuevos opcionales. Renombrar, quitar o cambiar el t
 | HTTP | `error` | Qué ha pasado | Qué cambiar |
 | --- | --- | --- | --- |
 | el proceso no arranca | — | Falta `LITELLM_API_KEY` | Rellénala en `.env` y vuelve a lanzar uvicorn |
-| 422 | validación de FastAPI | La transcripción tiene menos de 50 caracteres, o falta el campo | Alarga el texto o revisa el JSON |
+| 422 | validación de FastAPI | La descripción tiene menos de 50 caracteres, enum inválido o falta el campo | Alarga el texto o revisa el JSON |
+| 422 | `input_rejected` | Inyección de prompt con `GUARDRAILS_MODE=enforce` | Quita esas frases; en `log` solo se registra |
+| 422 | `unknown_prompt_version` | La carpeta de prompt no existe | Usa `GET /api/v2/prompts` |
 | 413 | `context_budget_exceeded` | La petición no cabe en la ventana con el margen | Sube `MODEL_CONTEXT_WINDOW` si el modelo lo permite, baja `CONTEXT_MAX_TOKENS` o acorta la transcripción |
 | 502 | `llm_unavailable` | El proxy no completó la llamada | Revisa la clave, `LITELLM_BASE_URL` y que el nombre de `LLM_MODEL` exista en el proxy |
 | 502 | `llm_output_truncated` | La respuesta llegó a `LLM_MAX_TOKENS` | Súbelo. 3000 se queda corto en una actualización |
@@ -175,18 +199,22 @@ El contrato v1 admite campos nuevos opcionales. Renombrar, quitar o cambiar el t
 ## Arquitectura
 
 ```
-Cliente
-  → routers/estimations.py          valida y delega
-  → services/llm_service.py         generate_estimation()
-       → context/preprocessing.py   formatea el contexto
-       → services/prompt_builder.py arma el prompt y la caché
-       → services/llm_client.py     LiteLLM (chat.completions, AsyncOpenAI)
+Cliente (front Next → /api/v2)
+  → routers/estimations(_v2).py     valida y delega
+  → services/llm_service.py         generate_estimation() / stream
+       → services/guardrails.py     entrada (inyección, PII) y salida
+       → context/preprocessing.py   formatea el contexto CAG
+       → prompts/loader.py          plantillas Jinja2 versionadas
+       → services/prompt_builder.py orden, segmentos y caché del prefijo
+       → state/response_cache.py    caché exacta (memoria)
+       → state/semantic_cache.py    caché semántica (Redis o memoria)
+       → services/llm_client.py     LiteLLM (chat + embeddings)
        → services/postprocessor.py  valida, corrige y pasa a Markdown
 ```
 
-El router no construye prompts ni traduce errores del modelo. Esos errores salen como `ServiceError` y `main.py` los convierte en HTTP. El estado de las conversaciones vive en `app/state/`, fuera del servicio.
+El router no construye prompts ni traduce errores del modelo. Esos errores salen como `ServiceError` y `main.py` los convierte en HTTP. Conversaciones y caché exacta viven en `app/state/` (memoria del proceso). La caché semántica usa Redis si hay `REDIS_URL`.
 
-Un worker. El historial y la caché de respuestas están en la memoria del proceso y se pierden al reiniciar. La caché devuelve la misma estimación si coinciden la transcripción, el modelo, la temperatura, la versión del prompt y el historial, durante 24 horas, y no llama al modelo. Varios workers tendrían memorias distintas. Quien itera `stream_estimation` ve el markdown ya formateado, actualizado con cada trozo; un acierto de caché llega de una vez. `POST /api/v1/estimate` sigue esperando la estimación completa.
+Un worker. La caché exacta coincide en descripción, modelo, temperatura, versión del prompt e historial. La semántica solo mira el primer turno, con bucket por versión/formato/modelo. `SEMANTIC_CACHE_MODE=log` mide sin servir. Quien itera `stream_estimation` ve el markdown visible por trozos.
 
 ## Dónde se ajusta el funcionamiento
 
@@ -198,12 +226,14 @@ La configuración de una ejecución va en `.env`. El comportamiento del producto
 | Tarifas por hora y sus rangos | `RATE_CARD` en `app/context/examples.py` |
 | Estimaciones históricas que el modelo usa de referencia | `ESTIMATION_EXAMPLES` en `app/context/examples.py`. Datos en bruto, sin costes calculados a mano |
 | Qué se considera obsoleto, cómo se anonimiza, cómo se pasa de días a horas y cómo se redacta cada nivel de detalle | `app/context/preprocessing.py` |
-| Rol, formato de salida, restricciones, recordatorio de cada turno y orden del prompt | `app/services/prompt_builder.py` |
-| Marca de caché de Anthropic y el punto de corte cuando los ejemplos dejen de ser estáticos | `apply_cache_strategy` en `app/services/prompt_builder.py` |
-| Transporte hacia LiteLLM: reintentos, coste de la cabecera, tokens cacheados | `app/services/llm_client.py` |
+| Redacción del prompt (rol, formato, restricciones, recordatorio) | `app/prompts/estimation/<versión>/*.j2`. Versión nueva = carpeta nueva |
+| Orden, segmentos y marca de caché del prefijo | `app/services/prompt_builder.py` y `app/prompts/loader.py` |
+| Transporte hacia LiteLLM: reintentos, coste, embeddings | `app/services/llm_client.py` |
+| Guardrails (inyección, PII, fuera de alcance) | `app/services/guardrails.py` y `GUARDRAILS_MODE` |
 | Qué se corrige solo (costes, totales, horas a múltiplos de 5) y qué se avisa en `warnings` | `app/services/postprocessor.py` |
 | Orden de las etapas y el reintento cuando el JSON no vale | `app/services/llm_service.py` |
 | Cuántos turnos caben, qué anclas no se tiran y el TTL | `app/state/conversations.py` y las variables `CONVERSATION_*` |
+| Caché semántica | `app/state/semantic_cache.py`, `SEMANTIC_CACHE_*`, `REDIS_URL` |
 | Campos de la petición o de la respuesta | `app/schemas/`. Un cambio que rompa el contrato va a `/api/v2` |
 | Comparar formato, detalle, número de ejemplos o modelo | `experiments/variants.toml` y `uv run python scripts/run_experiment.py` |
 | Textos de prueba y rangos esperados | `data/transcripcion_reunion.md` y `data/transcripciones/` |
@@ -214,11 +244,11 @@ Los ejemplos van en un orden fijo. Reordenarlos por petición rompería la cach�
 
 El prompt sigue este orden, de mayor a menor atención del modelo:
 
-1. Rol, tarea y formato de salida.
+1. Rol, tarea y formato de salida (condicionales por detalle y formato del formulario).
 2. Tabla de tarifas.
 3. Estimaciones de referencia, con separadores.
-4. Restricciones.
-5. Transcripción, en el mensaje de usuario.
+4. Alcance (`<scope>`) y restricciones.
+5. Descripción del proyecto, en el mensaje de usuario.
 
 `context/examples.py` guarda los datos en bruto. `context/preprocessing.py` los valida, tira los obsoletos, anonimiza, normaliza unidades y roles, calcula costes y elige el nivel de detalle (`summary`, `standard`, `full`). El formato del bloque (`markdown`, `plain` o `json`) se cambia con `CONTEXT_FORMAT`.
 
@@ -255,8 +285,16 @@ uv run ruff check .
 uv run pytest
 ```
 
-Los tests no llaman al modelo: sustituyen `llm_client.complete` y dejan las claves de Langfuse vacías. GitHub Actions comprueba la estructura, el lint, los tests, que el servidor arranca y el presupuesto de las variantes.
+Por defecto se saltan los marcados `presidio` y `redis`. Con el modelo spaCy y Redis:
+
+```bash
+uv run python -m spacy download es_core_news_md
+uv run pytest -m presidio
+REDIS_URL=redis://127.0.0.1:6379 uv run pytest -m redis
+```
+
+Los tests del job principal no llaman al modelo: sustituyen `llm_client.complete` (y el embedding cuando hace falta) y dejan las claves de Langfuse vacías. GitHub Actions añade jobs aparte para Presidio y Redis.
 
 ## Evolución
 
-Cuando haya demasiados ejemplos para meterlos todos, `build_context_block()` recibirá la lista que devuelva un retrieval y los ejemplos dejarán de formar parte del prefijo cacheable. `llm_client.py` es el cliente que reutilizará la futura llamada de embeddings. `app/models/` queda reservado para los modelos de base de datos; Pydantic vive en `app/schemas/`.
+Cuando haya demasiados ejemplos para meterlos todos, `build_context_block()` recibirá la lista que devuelva un retrieval y los ejemplos dejarán de formar parte del prefijo cacheable. Los embeddings ya pasan por `llm_client.embed`. `app/models/` queda reservado para los modelos de base de datos; Pydantic vive en `app/schemas/`.
