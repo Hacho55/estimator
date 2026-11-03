@@ -23,6 +23,7 @@ REQUIRED = [
     "app/services/prompt_builder.py",
     "app/services/llm_client.py",
     "app/services/postprocessor.py",
+    "app/services/guardrails.py",
     "app/services/errors.py",
     "app/prompts/__init__.py",
     "app/prompts/loader.py",

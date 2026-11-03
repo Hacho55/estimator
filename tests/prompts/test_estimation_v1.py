@@ -88,6 +88,7 @@ def test_system_splits_into_cache_segments() -> None:
     segments = messages[0]["segments"]
     assert [item["segment"] for item in segments] == ["static", "examples", "restrictions"]
     assert "<examples>" in segments[1]["text"]
-    assert segments[2]["text"].startswith("<constraints>")
+    assert segments[2]["text"].startswith("<scope>")
+    assert "<constraints>" in segments[2]["text"]
     rebuilt = split_system_segments(messages[0]["content"])
     assert [item["segment"] for item in rebuilt] == ["static", "examples", "restrictions"]

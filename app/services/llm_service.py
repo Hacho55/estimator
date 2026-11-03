@@ -45,6 +45,7 @@ from app.services.errors import (
     LLMUnavailableError,
     PromptVersionError,
 )
+from app.services.guardrails import guard_input, guard_output
 from app.services.postprocessor import (
     parse_turn,
     preview_markdown,
@@ -310,6 +311,7 @@ def _prepare(
     provider: str,
 ) -> _Prepared:
     settings = get_settings()
+    transcription = guard_input(transcription)
     # Observabilidad: el span anota el paso. _context_for es el trabajo del estimador.
     with traced_span("build-context") as context_span:
         block = _context_for(transcription, overrides)
@@ -565,6 +567,8 @@ async def _assemble(first: llm_client.LLMResult, prepared: _Prepared, *, transcr
                 turn.estimation,  # type: ignore[arg-type]
                 require_phase_assumptions=prepared.form_detail_level == DetailLevel.DETAILED,
             )
+            estimation, guard_warnings = guard_output(estimation)
+            warnings = [*warnings, *guard_warnings]
             markdown = render_markdown(estimation)
             _annotate(post_span, output={"warnings": [issue.code for issue in warnings]})
 

@@ -25,9 +25,15 @@ from tests.llm_fakes import estimation_turn
 
 
 @pytest.fixture(autouse=True)
-def _clear_settings_cache():
+def _clear_settings_cache(monkeypatch, request):
     get_settings.cache_clear()
     clear_response_cache()
+    # Evita cargar spaCy en el job principal: la vía regex basta para los tests.
+    if "presidio" not in request.keywords:
+        import app.services.guardrails as guardrails
+
+        monkeypatch.setattr(guardrails, "_PRESIDIO", None)
+        monkeypatch.setattr(guardrails, "_PRESIDIO_TRIED", True)
     yield
     get_settings.cache_clear()
     clear_response_cache()

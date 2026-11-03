@@ -59,3 +59,25 @@ jobs:
           npm ci
           npm run build
           node --experimental-strip-types --test lib/readEstimateStream.test.ts
+
+  presidio:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          prune-cache: false
+      - name: Instalar dependencias y modelo spaCy
+        run: |
+          uv sync --locked
+          uv run python -m spacy download es_core_news_md
+      - name: Tests Presidio
+        run: uv run pytest -m presidio
+        env:
+          LITELLM_API_KEY: dummy
+          LITELLM_BASE_URL: https://example.invalid
+          LLM_MODEL: openrouter/openai/gpt-4o-mini
+          APP_ENV: development
+          LANGFUSE_PUBLIC_KEY: ""
+          LANGFUSE_SECRET_KEY: ""

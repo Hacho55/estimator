@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     LLM_PROMPT_CACHE: Literal["auto", "off"] = "auto"
     LLM_PROMPT_VERSION: str = "v1"
 
+    # Guardrails: log registra sin bloquear las políticas exception; enforce las aplica.
+    GUARDRAILS_MODE: Literal["log", "enforce"] = "log"
+    PII_SCORE_THRESHOLD: float = Field(0.5, ge=0, le=1)
+
     CONTEXT_FORMAT: Literal["markdown", "plain", "json"] = "markdown"
     CONTEXT_DETAIL_LEVEL: Literal["summary", "standard", "full"] = "standard"
     CONTEXT_MAX_EXAMPLES: int = Field(7, gt=0)

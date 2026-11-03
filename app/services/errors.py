@@ -55,3 +55,8 @@ class ConversationNotFoundError(ServiceError):
 class PromptVersionError(ServiceError):
     status_code = 422
     code = "unknown_prompt_version"
+
+
+class InputRejectedError(ServiceError):
+    status_code = 422
+    code = "input_rejected"

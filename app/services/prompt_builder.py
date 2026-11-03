@@ -41,8 +41,8 @@ def split_system_segments(system_text: str) -> list[dict[str, str]]:
     examples_body, after = rest.split("</examples>", 1)
     examples = f"<examples>{examples_body}</examples>"
     restrictions = after.strip()
-    if not restrictions.startswith("<constraints>"):
-        raise ValueError("El system prompt no deja <constraints> tras los ejemplos.")
+    if not (restrictions.startswith("<constraints>") or restrictions.startswith("<scope>")):
+        raise ValueError("El system prompt no deja <scope>/<constraints> tras los ejemplos.")
     return [
         {"segment": "static", "text": before.rstrip()},
         {"segment": "examples", "text": examples},

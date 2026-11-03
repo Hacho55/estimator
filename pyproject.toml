@@ -9,6 +9,8 @@ dependencies = [
     "jinja2>=3.1.6",
     "langfuse>=5.0.2,<6",
     "openai>=3.36.1",
+    "presidio-analyzer>=2.2.359",
+    "presidio-anonymizer>=2.2.359",
     "pydantic-settings>=2.16.1",
     "python-dotenv>=1.2.4",
     "structlog>=26.1.0",
@@ -27,6 +29,11 @@ dev = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+addopts = "-m 'not presidio and not redis'"
+markers = [
+    "presidio: requiere Presidio con el modelo spaCy es_core_news_md",
+    "redis: requiere Redis con búsqueda vectorial",
+]
 
 [tool.ruff]
 line-length = 150
