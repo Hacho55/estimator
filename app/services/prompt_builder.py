@@ -210,14 +210,32 @@ def repair_instruction(error: str, version: str = DEFAULT_PROMPT_VERSION) -> str
     return render_repair(version, error=error)
 
 
-def build_preview(transcription: str, context_block: ContextBlock | None = None) -> PromptPreview:
+def build_preview(
+    transcription: str,
+    context_block: ContextBlock | None = None,
+    *,
+    prompt_label: str = DEFAULT_PROMPT_VERSION,
+    detail_level: DetailLevel = DEFAULT_DETAIL_LEVEL,
+    output_format: OutputFormat = DEFAULT_OUTPUT_FORMAT,
+    project_type=None,
+) -> PromptPreview:
     from app.context.preprocessing import get_context_block
 
     block = context_block or get_context_block(transcription)
     settings = get_settings()
     provider = derive_provider(settings.LLM_MODEL)
     messages = apply_cache_strategy(
-        build_messages(transcription, block), provider, block, settings.LLM_PROMPT_CACHE
+        build_messages(
+            transcription,
+            block,
+            prompt_label=prompt_label,
+            detail_level=detail_level,
+            output_format=output_format,
+            project_type=project_type,
+        ),
+        provider,
+        block,
+        settings.LLM_PROMPT_CACHE,
     )
     prefix = system_text_of(messages)
     budget = build_token_budget(
@@ -237,7 +255,7 @@ def build_preview(transcription: str, context_block: ContextBlock | None = None)
         visible.append(PromptMessage(role=message["role"], content=content))
     versioned = prompt_version(
         prefix if block.examples_are_static else cacheable_text(messages, block),
-        DEFAULT_PROMPT_VERSION,
+        prompt_label,
     )
     return PromptPreview(
         messages=visible,

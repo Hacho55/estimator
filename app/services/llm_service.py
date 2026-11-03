@@ -26,11 +26,14 @@ from app.observability import (
     set_trace_io,
     traced_span,
 )
+from app.prompts.loader import UnknownPromptVersionError
 from app.schemas.context import ContextBlock, ContextInfo
 from app.schemas.conversation import ChatMessage
 from app.schemas.estimation import (
     ContextMeta,
+    DetailLevel,
     EstimationResponse,
+    OutputFormat,
     UsageInfo,
     ValidationIssue,
 )
@@ -40,6 +43,7 @@ from app.services.errors import (
     InvalidLLMOutputError,
     LLMOutputTruncatedError,
     LLMUnavailableError,
+    PromptVersionError,
 )
 from app.services.postprocessor import (
     parse_turn,
@@ -49,6 +53,7 @@ from app.services.postprocessor import (
     validate_and_fix,
 )
 from app.services.prompt_builder import (
+    DEFAULT_PROMPT_VERSION,
     apply_cache_strategy,
     build_messages,
     build_preview,
@@ -107,10 +112,14 @@ def choose_model(transcription: str, *, has_history: bool) -> str:
 @dataclass
 class ContextOverrides:
     format: str | None = None
-    detail_level: str | None = None
+    detail_level: str | None = None  # Nivel del bloque CAG (summary/standard/full).
     max_examples: int | None = None
     model: str | None = None
     prompt_cache: str | None = None
+    prompt_version: str | None = None  # Carpeta de plantilla (v1, v2).
+    form_detail_level: object | None = None  # DetailLevel del formulario.
+    output_format: object | None = None
+    project_type: object | None = None
 
 
 @dataclass
@@ -252,6 +261,7 @@ class _Prepared:
     metadata: dict
     key: str
     cached: object
+    form_detail_level: object = DetailLevel.MEDIUM
 
 
 def _log_cache_hit(cached, estimated_input_tokens: int) -> None:
@@ -314,21 +324,38 @@ def _prepare(
         )
 
     history, dropped = _history_that_fits(transcription, block, conversation_history or [], overrides, model)
+    prompt_label = overrides.prompt_version or settings.LLM_PROMPT_VERSION or DEFAULT_PROMPT_VERSION
+    form_detail = overrides.form_detail_level or DetailLevel.MEDIUM
+    output_format = overrides.output_format or OutputFormat.PHASES_TABLE
     # Observabilidad: el span anota el prompt. El 413 lo decide el presupuesto, no la traza.
     with traced_span("build-prompt") as prompt_span:
-        messages = apply_cache_strategy(
-            build_messages(transcription, block, history),
-            provider,
-            block,
-            overrides.prompt_cache,
-        )
+        try:
+            messages = apply_cache_strategy(
+                build_messages(
+                    transcription,
+                    block,
+                    history,
+                    prompt_label=prompt_label,
+                    detail_level=form_detail,  # type: ignore[arg-type]
+                    output_format=output_format,  # type: ignore[arg-type]
+                    project_type=overrides.project_type,
+                ),
+                provider,
+                block,
+                overrides.prompt_cache,
+            )
+        except UnknownPromptVersionError as exc:
+            raise PromptVersionError(str(exc)) from exc
         budget = _budget(messages, block, transcription, history, model)
         if not budget.fits:
             raise ContextBudgetExceededError(
                 "La petición no cabe en la ventana de contexto con el margen de seguridad. "
                 f"Entrada aproximada: {budget.total_input} tokens; ventana: {budget.window}."
             )
-        version = prompt_version(system_text_of(messages) if block.examples_are_static else cacheable_text(messages, block))
+        version = prompt_version(
+            system_text_of(messages) if block.examples_are_static else cacheable_text(messages, block),
+            prompt_label,
+        )
         _annotate(prompt_span, output={"prompt_version": version, "messages": len(messages)})
 
     # Sesión 3 · caché: la clave incluye el historial para no mezclar turnos.
@@ -350,6 +377,7 @@ def _prepare(
         metadata={"prompt_version": version, "examples": ",".join(block.included_ids)},
         key=key,
         cached=lookup(key),
+        form_detail_level=form_detail,
     )
 
 
@@ -533,7 +561,10 @@ async def _assemble(first: llm_client.LLMResult, prepared: _Prepared, *, transcr
     if turn.kind in {"estimation", "estimation_update"}:
         # Observabilidad: el span anota los avisos. validate_and_fix es el trabajo del estimador.
         with traced_span("postprocess") as post_span:
-            estimation, warnings = validate_and_fix(turn.estimation)  # type: ignore[arg-type]
+            estimation, warnings = validate_and_fix(
+                turn.estimation,  # type: ignore[arg-type]
+                require_phase_assumptions=prepared.form_detail_level == DetailLevel.DETAILED,
+            )
             markdown = render_markdown(estimation)
             _annotate(post_span, output={"warnings": [issue.code for issue in warnings]})
 
@@ -683,5 +714,19 @@ def get_context_info(include_text: bool = False) -> ContextInfo:
     )
 
 
-def preview_prompt(transcription: str):
-    return build_preview(transcription)
+def preview_prompt(
+    transcription: str,
+    *,
+    prompt_label: str = "v1",
+    detail_level=None,
+    output_format=None,
+    project_type=None,
+):
+    kwargs = {"prompt_label": prompt_label}
+    if detail_level is not None:
+        kwargs["detail_level"] = detail_level
+    if output_format is not None:
+        kwargs["output_format"] = output_format
+    if project_type is not None:
+        kwargs["project_type"] = project_type
+    return build_preview(transcription, **kwargs)

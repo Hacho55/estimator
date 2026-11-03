@@ -64,6 +64,7 @@ def overrides_from(variant: dict) -> ContextOverrides:
         max_examples=variant.get("max_examples"),
         model=variant.get("model"),
         prompt_cache=variant.get("prompt_cache"),
+        prompt_version=variant.get("prompt_version"),
     )
 
 

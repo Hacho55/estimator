@@ -10,6 +10,8 @@ El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y e
 
 ### Añadido
 
+- `/api/v2` publica el formulario tipado (`description`, `project_type`, `detail_level`, `output_format`) y `GET /api/v2/prompts`. La carpeta de plantilla se elige con `prompt_version` (query) o `LLM_PROMPT_VERSION` (defecto `v1`). La variante `v2` pide nombrar el ejemplo de referencia en los supuestos; el experimento `prompt-v2` la compara con `baseline`.
+- `Estimation` calcula `phases` a partir de las tareas. `phase_assumptions` es opcional y, con detalle `detailed`, su ausencia deja un aviso.
 - El texto del prompt vive en plantillas Jinja2 versionadas (`app/prompts/estimation/v1/`). El loader renderiza system y user; `prompt_builder` solo ordena segmentos, caché e historial. La versión informada sigue siendo `v1-<hash>` del texto renderizado.
 - El front en `web/` es una aplicación Next que lee `POST /api/v1/estimate/stream`: muestra los trozos y, al cerrar, el markdown. Un acierto de caché pinta la estimación de una vez. Los colores y las familias salen de la página de Netretina.
 - `POST /api/v1/estimate/stream` envía cada trozo en un evento `token` y cierra con `estimate`. Un acierto de caché manda solo `estimate`. `POST /api/v1/estimate` no cambia.

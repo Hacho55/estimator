@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 
 from app.config import APP_VERSION, get_settings
 from app.observability import flush_langfuse, setup_observability
-from app.routers import estimations
+from app.routers import estimations, estimations_v2
 from app.schemas.estimation import ErrorResponse
 from app.services.errors import ServiceError
 
@@ -36,6 +36,7 @@ app.add_middleware(
     allow_headers=["content-type"],
 )
 app.include_router(estimations.router)
+app.include_router(estimations_v2.router)
 
 
 @app.exception_handler(ServiceError)

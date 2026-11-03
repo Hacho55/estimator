@@ -50,3 +50,8 @@ class ConversationNotFoundError(ServiceError):
             f"No existe la conversación {conversation_id} o ya expiró. "
             "Crea una nueva con POST /api/v1/conversations."
         )
+
+
+class PromptVersionError(ServiceError):
+    status_code = 422
+    code = "unknown_prompt_version"

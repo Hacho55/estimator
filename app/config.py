@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     LLM_MAX_RETRIES: int = Field(3, ge=0)
     LLM_RESPONSE_FORMAT: Literal["json_schema", "json_object"] = "json_schema"
     LLM_PROMPT_CACHE: Literal["auto", "off"] = "auto"
+    LLM_PROMPT_VERSION: str = "v1"
 
     CONTEXT_FORMAT: Literal["markdown", "plain", "json"] = "markdown"
     CONTEXT_DETAIL_LEVEL: Literal["summary", "standard", "full"] = "standard"

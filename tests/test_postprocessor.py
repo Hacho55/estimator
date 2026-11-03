@@ -88,3 +88,43 @@ def test_a_partial_response_renders_as_markdown():
     assert "Maquetación" in full
     assert "Supuestos" in full
     assert "{" not in full
+
+
+def test_phases_sum_tasks_in_appearance_order():
+    payload = estimation_payload()
+    estimation, _issues = validate_and_fix(
+        parse_turn(
+            json.dumps({"kind": "estimation", "message": "ok", "estimation": payload})
+        ).estimation
+    )
+    assert [phase.phase for phase in estimation.phases] == ["Frontend", "Backend", "Calidad"]
+    assert estimation.phases[0].hours == 60
+    assert estimation.phases[0].cost_eur == 3300
+    assert estimation.phases[1].hours == 30
+    assert estimation.phases[2].hours == 10
+
+
+def test_missing_phase_assumptions_warns_when_required():
+    payload = estimation_payload()
+    estimation, issues = validate_and_fix(
+        parse_turn(
+            json.dumps({"kind": "estimation", "message": "ok", "estimation": payload})
+        ).estimation,
+        require_phase_assumptions=True,
+    )
+    assert any(issue.code == "missing_phase_assumptions" for issue in issues)
+    assert estimation.phases
+
+
+def test_phase_assumptions_appear_in_markdown():
+    payload = estimation_payload(
+        phase_assumptions=[{"phase": "Frontend", "assumptions": ["Figma cerrado."]}]
+    )
+    estimation, _issues = validate_and_fix(
+        parse_turn(
+            json.dumps({"kind": "estimation", "message": "ok", "estimation": payload})
+        ).estimation
+    )
+    markdown = render_markdown(estimation)
+    assert "Frontend" in markdown
+    assert "Figma cerrado." in markdown

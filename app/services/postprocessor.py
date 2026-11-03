@@ -63,8 +63,32 @@ def _issue(
     )
 
 
+def _phases_from_tasks(tasks: list[dict], *, weeks_min: float, weeks_max: float) -> list[dict]:
+    order: list[str] = []
+    buckets: dict[str, dict[str, float]] = {}
+    for task in tasks:
+        phase = str(task.get("phase") or "Sin fase")
+        if phase not in buckets:
+            order.append(phase)
+            buckets[phase] = {"hours": 0.0, "cost_eur": 0.0}
+        buckets[phase]["hours"] += float(task.get("hours") or 0)
+        buckets[phase]["cost_eur"] += float(task.get("cost_eur") or 0)
+    total_hours = sum(item["hours"] for item in buckets.values()) or 1.0
+    mid_weeks = (float(weeks_min) + float(weeks_max)) / 2 if (weeks_min or weeks_max) else 0.0
+    phases: list[dict] = []
+    for phase in order:
+        hours = round(buckets[phase]["hours"], 2)
+        cost = round(buckets[phase]["cost_eur"], 2)
+        weeks = round(mid_weeks * (hours / total_hours), 2) if mid_weeks else 0.0
+        phases.append({"phase": phase, "hours": hours, "cost_eur": cost, "weeks": weeks})
+    return phases
+
+
 def validate_and_fix(
-    draft: EstimationDraft, rate_card: dict[str, dict[str, float]] | None = None
+    draft: EstimationDraft,
+    rate_card: dict[str, dict[str, float]] | None = None,
+    *,
+    require_phase_assumptions: bool = False,
 ) -> tuple[Estimation, list[ValidationIssue]]:
     card = rate_card or RATE_CARD
     issues: list[ValidationIssue] = []
@@ -78,6 +102,7 @@ def validate_and_fix(
                 draft.not_estimable_reason or "El modelo marcó la petición como no estimable.",
             )
         )
+        data["phases"] = []
         return Estimation.model_validate(data), issues
 
     for index, task in enumerate(data["tasks"]):
@@ -185,6 +210,30 @@ def validate_and_fix(
     if not data["risks"]:
         issues.append(_issue("no_risks", "info", "La estimación no declara riesgos."))
 
+    task_phases = {str(task["phase"]) for task in data["tasks"]}
+    phase_assumptions = data.get("phase_assumptions") or []
+    if require_phase_assumptions and not phase_assumptions:
+        issues.append(
+            _issue(
+                "missing_phase_assumptions",
+                "info",
+                "El detalle detailed pedía supuestos por fase y no llegaron.",
+                "phase_assumptions",
+            )
+        )
+    for index, entry in enumerate(phase_assumptions):
+        phase = str(entry.get("phase") or "")
+        if phase and phase not in task_phases:
+            issues.append(
+                _issue(
+                    "unknown_phase_assumption",
+                    "info",
+                    f"Los supuestos nombran la fase '{phase}', que no tiene tareas.",
+                    f"phase_assumptions[{index}].phase",
+                    phase,
+                )
+            )
+
     capacity = sum(float(member["count"]) * float(member["dedication"]) for member in data["team"])
     if capacity > 0 and total_hours > 0:
         implied_weeks = total_hours / (capacity * 40)
@@ -204,6 +253,11 @@ def validate_and_fix(
                 )
             )
 
+    data["phases"] = _phases_from_tasks(
+        data["tasks"],
+        weeks_min=float(data["duration_weeks_min"]),
+        weeks_max=float(data["duration_weeks_max"]),
+    )
     return Estimation.model_validate(data), issues
 
 
@@ -341,6 +395,27 @@ def _render_partial_estimation(estimation: dict) -> str:
         lines.extend(f"- {item}" for item in assumptions if isinstance(item, str) and item)
         lines.append("")
 
+    phase_assumptions = estimation.get("phase_assumptions")
+    if isinstance(phase_assumptions, list):
+        shown = False
+        for entry in phase_assumptions:
+            if not isinstance(entry, dict):
+                continue
+            phase = entry.get("phase")
+            items = entry.get("assumptions")
+            if not isinstance(phase, str) or not isinstance(items, list):
+                continue
+            useful = [item for item in items if isinstance(item, str) and item]
+            if not useful:
+                continue
+            if not shown:
+                lines.append("### Supuestos por fase")
+                shown = True
+            lines.append(f"**{phase}**")
+            lines.extend(f"- {item}" for item in useful)
+        if shown:
+            lines.append("")
+
     risks = estimation.get("risks")
     if isinstance(risks, list) and any(isinstance(item, str) and item for item in risks):
         lines.append("### Riesgos")
@@ -360,6 +435,10 @@ def render_markdown(estimation: Estimation) -> str:
         lines.append(
             f"| {task.name} | {task.phase} | {task.role} | {task.hours:g} | {task.rate_eur:g} | {task.cost_eur:g} |"
         )
+    if estimation.phases:
+        lines.extend(["", "### Fases", "", "| Fase | Horas | Coste | Semanas |", "| --- | --- | --- | --- |"])
+        for phase in estimation.phases:
+            lines.append(f"| {phase.phase} | {phase.hours:g} | {phase.cost_eur:g} | {phase.weeks:g} |")
     lines.extend(
         [
             "",
@@ -383,6 +462,11 @@ def render_markdown(estimation: Estimation) -> str:
         ]
     )
     lines.extend(f"- {item}" for item in estimation.assumptions)
+    if estimation.phase_assumptions:
+        lines.extend(["", "### Supuestos por fase"])
+        for entry in estimation.phase_assumptions:
+            lines.append(f"**{entry.phase}**")
+            lines.extend(f"- {item}" for item in entry.assumptions)
     lines.extend(["", "### Riesgos"])
     lines.extend(f"- {item}" for item in estimation.risks)
     return "\n".join(lines)

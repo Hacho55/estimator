@@ -32,3 +32,7 @@ prompt_cache = "off"
 [[variant]]
 name = "model-haiku"
 model = "openrouter/anthropic/claude-haiku-4.5"
+
+[[variant]]
+name = "prompt-v2"
+prompt_version = "v2"

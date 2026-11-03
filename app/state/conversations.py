@@ -75,6 +75,10 @@ class Conversation:
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    prompt_version: str | None = None
+    project_type: object | None = None
+    form_detail_level: object | None = None
+    output_format: object | None = None
 
 
 class ConversationStore:

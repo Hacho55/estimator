@@ -48,19 +48,50 @@ class EstimationRequest(BaseModel):
     )
 
 
+class FormEstimationRequest(BaseModel):
+    """Contrato del formulario tipado (API v2)."""
+
+    description: str = Field(
+        ...,
+        min_length=50,
+        max_length=_settings.TRANSCRIPTION_MAX_CHARS,
+        description="Descripción o transcripción del proyecto a estimar",
+    )
+    project_type: ProjectType
+    detail_level: DetailLevel
+    output_format: OutputFormat
+
+
+class PromptVersionsResponse(BaseModel):
+    versions: list[str]
+    default: str
+
+
 class DraftTask(BaseModel):
     name: str
     phase: str
     role: str
-    hours: float
-    rate_eur: float
-    cost_eur: float
+    hours: float = Field(ge=0)
+    rate_eur: float = Field(ge=0)
+    cost_eur: float = Field(ge=0)
 
 
 class DraftTeamMember(BaseModel):
     role: str
-    count: float
-    dedication: float
+    count: float = Field(ge=0)
+    dedication: float = Field(ge=0, le=1)
+
+
+class PhaseAssumptions(BaseModel):
+    phase: str
+    assumptions: list[str] = Field(default_factory=list)
+
+
+class PhaseSummary(BaseModel):
+    phase: str
+    hours: float
+    cost_eur: float
+    weeks: float
 
 
 class EstimationDraft(BaseModel):
@@ -76,10 +107,13 @@ class EstimationDraft(BaseModel):
     duration_weeks_max: float = 0
     assumptions: list[str] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
+    phase_assumptions: list[PhaseAssumptions] = Field(default_factory=list)
 
 
 class Estimation(EstimationDraft):
-    """Estimación ya validada. Los costes y los totales son los corregidos."""
+    """Estimación ya validada. Los costes, totales y fases son los corregidos."""
+
+    phases: list[PhaseSummary] = Field(default_factory=list)
 
 
 class TurnOutput(BaseModel):
