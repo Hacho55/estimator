@@ -348,7 +348,13 @@ export default function Page() {
           </div>
           <div>
             <dt>Origen</dt>
-            <dd>{estimate.cache_hit ? "caché" : "modelo"}</dd>
+            <dd>
+              {estimate.cache_hit
+                ? estimate.cache_kind === "semantic"
+                  ? `caché semántica${estimate.cache_similarity != null ? ` (${estimate.cache_similarity.toFixed(2)})` : ""}`
+                  : "caché exacta"
+                : "modelo"}
+            </dd>
           </div>
           <div>
             <dt>Prompt</dt>

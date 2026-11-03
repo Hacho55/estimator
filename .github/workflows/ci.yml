@@ -81,3 +81,30 @@ jobs:
           APP_ENV: development
           LANGFUSE_PUBLIC_KEY: ""
           LANGFUSE_SECRET_KEY: ""
+
+  redis:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis/redis-stack-server:latest
+        ports:
+          - 6379:6379
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          prune-cache: false
+      - name: Instalar dependencias
+        run: uv sync --locked
+      - name: Tests Redis
+        run: uv run pytest -m redis
+        env:
+          LITELLM_API_KEY: dummy
+          LITELLM_BASE_URL: https://example.invalid
+          LLM_MODEL: openrouter/openai/gpt-4o-mini
+          APP_ENV: development
+          REDIS_URL: redis://127.0.0.1:6379
+          SEMANTIC_CACHE_MODE: on
+          LANGFUSE_PUBLIC_KEY: ""
+          LANGFUSE_SECRET_KEY: ""

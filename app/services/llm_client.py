@@ -426,3 +426,17 @@ def _public_messages(messages: list[dict]) -> list[dict]:
     for message in messages:
         cleaned.append({key: value for key, value in message.items() if key in {"role", "content"}})
     return cleaned
+
+
+async def embed(text: str, *, model: str | None = None) -> list[float]:
+    """Embedding vía el mismo proxy LiteLLM. Si falla, quien llama degrada sin tumbar la estimación."""
+    settings = get_settings()
+    chosen = model or settings.EMBEDDING_MODEL
+    try:
+        response = await client.embeddings.create(model=chosen, input=text)
+    except (APITimeoutError, APIConnectionError, APIError) as exc:
+        raise _as_service_error(exc) from exc
+    data = response.data
+    if not data:
+        raise LLMUnavailableError("El proxy no devolvió embeddings.")
+    return list(data[0].embedding)

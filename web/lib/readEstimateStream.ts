@@ -47,6 +47,8 @@ export type EstimatePayload = {
   latency_ms: number;
   finish_reason: string | null;
   cache_hit: boolean;
+  cache_kind?: string | null;
+  cache_similarity?: number | null;
   prompt_version: string;
   conversation_id?: string;
   turn?: number;

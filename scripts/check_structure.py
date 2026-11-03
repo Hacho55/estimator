@@ -42,6 +42,8 @@ REQUIRED = [
     "app/context/preprocessing.py",
     "app/state/__init__.py",
     "app/state/conversations.py",
+    "app/state/semantic_cache.py",
+    "docker-compose.yml",
     "app/evaluation/__init__.py",
     "app/evaluation/metrics.py",
     ".env.example",

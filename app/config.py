@@ -44,6 +44,13 @@ class Settings(BaseSettings):
     GUARDRAILS_MODE: Literal["log", "enforce"] = "log"
     PII_SCORE_THRESHOLD: float = Field(0.5, ge=0, le=1)
 
+    # Caché semántica. log mide sin servir; on sirve aciertos; off la apaga.
+    REDIS_URL: str = ""
+    SEMANTIC_CACHE_MODE: Literal["off", "log", "on"] = "log"
+    SEMANTIC_CACHE_THRESHOLD: float = Field(0.92, ge=0, le=1)
+    EMBEDDING_MODEL: str = "openrouter/openai/text-embedding-3-small"
+    EMBEDDING_DIMS: int = Field(1536, gt=0)
+
     CONTEXT_FORMAT: Literal["markdown", "plain", "json"] = "markdown"
     CONTEXT_DETAIL_LEVEL: Literal["summary", "standard", "full"] = "standard"
     CONTEXT_MAX_EXAMPLES: int = Field(7, gt=0)

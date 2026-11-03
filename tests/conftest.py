@@ -13,6 +13,8 @@ os.environ["LLM_FALLBACK_MODEL"] = ""
 os.environ["LLM_ROUTING"] = "off"
 os.environ["LOG_LEVEL"] = "WARNING"
 os.environ["LOG_PROMPTS"] = "false"
+os.environ.setdefault("SEMANTIC_CACHE_MODE", "off")
+os.environ.setdefault("REDIS_URL", "")
 
 import pytest
 from fastapi.testclient import TestClient

@@ -160,6 +160,8 @@ class EstimationResponse(BaseModel):
     cost_usd: float | None = None
     latency_ms: float
     cache_hit: bool = False  # Sesión 3 · caché: true si no hubo llamada al modelo.
+    cache_kind: str | None = None  # exact | semantic
+    cache_similarity: float | None = None
     trace_id: str | None = None  # Observabilidad. Vacío si Langfuse está apagado.
     created_at: datetime
 

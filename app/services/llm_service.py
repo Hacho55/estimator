@@ -10,6 +10,7 @@ La implementación vive en app/observability.py.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -66,7 +67,13 @@ from app.services.prompt_builder import (
     system_text_of,
 )
 from app.state.conversations import select_history
-from app.state.response_cache import cache_key, lookup, store
+from app.state.response_cache import CachedCompletion, cache_key, lookup, store
+from app.state.semantic_cache import (
+    bucket_id,
+    emit_semantic_check,
+    lookup_semantic,
+    store_semantic,
+)
 from app.tokens import CACHE_MIN_TOKENS, build_token_budget
 
 GATEWAY = "litellm"
@@ -141,6 +148,8 @@ class TurnResult:
     provider: str
     trace_id: str | None
     cache_hit: bool = False
+    cache_kind: str | None = None
+    cache_similarity: float | None = None
     finish_reason: str | None = None
     dropped_turns: int = 0
     repairs: int = 0
@@ -163,6 +172,8 @@ class TurnResult:
             cost_usd=self.cost_usd,
             latency_ms=self.latency_ms,
             cache_hit=self.cache_hit,
+            cache_kind=self.cache_kind,
+            cache_similarity=self.cache_similarity,
             trace_id=self.trace_id,
             created_at=self.created_at,
         )
@@ -263,6 +274,13 @@ class _Prepared:
     key: str
     cached: object
     form_detail_level: object = DetailLevel.MEDIUM
+    output_format: object = OutputFormat.PHASES_TABLE
+    project_type: object | None = None
+    cache_kind: str | None = None
+    cache_similarity: float | None = None
+    semantic_vector: list[float] | None = None
+    semantic_bucket: str | None = None
+    scrubbed_text: str = ""
 
 
 def _log_cache_hit(cached, estimated_input_tokens: int) -> None:
@@ -368,6 +386,7 @@ def _prepare(
         prompt_version=version,
         history=history,
     )
+    cached = lookup(key)
     return _Prepared(
         block=block,
         history=history,
@@ -378,9 +397,52 @@ def _prepare(
         response_format=build_response_format(),
         metadata={"prompt_version": version, "examples": ",".join(block.included_ids)},
         key=key,
-        cached=lookup(key),
+        cached=cached,
         form_detail_level=form_detail,
+        output_format=output_format,
+        project_type=overrides.project_type,
+        cache_kind="exact" if cached is not None else None,
+        scrubbed_text=transcription,
     )
+
+
+async def _apply_semantic_cache(prepared: _Prepared, *, model: str) -> _Prepared:
+    """Tras la caché exacta: mide o sirve un vecino semántico. Solo el primer turno."""
+    settings = get_settings()
+    mode = settings.SEMANTIC_CACHE_MODE
+    if mode == "off" or prepared.history or prepared.cached is not None:
+        return prepared
+    try:
+        vector = await llm_client.embed(prepared.scrubbed_text)
+    except Exception as exc:  # noqa: BLE001
+        log_event("semantic_cache_embed_failed", detail=str(exc))
+        return prepared
+    bucket = bucket_id(
+        prompt_version=prepared.version,
+        project_type=prepared.project_type.value if hasattr(prepared.project_type, "value") else prepared.project_type,
+        detail_level=prepared.form_detail_level.value
+        if hasattr(prepared.form_detail_level, "value")
+        else prepared.form_detail_level,
+        output_format=prepared.output_format.value
+        if hasattr(prepared.output_format, "value")
+        else prepared.output_format,
+        model=model,
+    )
+    prepared.semantic_vector = vector
+    prepared.semantic_bucket = bucket
+    hit = lookup_semantic(bucket=bucket, vector=vector)
+    would_hit = hit is not None and hit.similarity >= settings.SEMANTIC_CACHE_THRESHOLD
+    emit_semantic_check(bucket=bucket, hit=hit, would_hit=would_hit, mode=mode)
+    if mode == "on" and would_hit and hit is not None and hit.content:
+        prepared.cached = CachedCompletion(
+            content=hit.content,
+            model=hit.model or model,
+            finish_reason=hit.finish_reason,
+            expires_at=time.monotonic() + 60,
+        )
+        prepared.cache_kind = "semantic"
+        prepared.cache_similarity = hit.similarity
+    return prepared
 
 
 class EstimationStream:
@@ -433,6 +495,7 @@ class EstimationStream:
                 model=model,
                 provider=provider,
             )
+            prepared = await _apply_semantic_cache(prepared, model=model)
             if prepared.cached is not None:
                 self.from_cache = True
                 _log_cache_hit(prepared.cached, prepared.budget.total_input)
@@ -493,6 +556,7 @@ async def _generate(
         model=model,
         provider=provider,
     )
+    prepared = await _apply_semantic_cache(prepared, model=model)
     if prepared.cached is None:
         first = await llm_client.complete(
             prepared.messages,
@@ -554,9 +618,6 @@ async def _assemble(first: llm_client.LLMResult, prepared: _Prepared, *, transcr
             cost = (cost or 0) + second.cost_usd
         answered = second
 
-    if cached is None:
-        store(key, content=answered.content, model=answered.model, finish_reason=answered.finish_reason)
-
     estimation = None
     warnings: list[ValidationIssue] = []
     markdown = None
@@ -571,6 +632,19 @@ async def _assemble(first: llm_client.LLMResult, prepared: _Prepared, *, transcr
             warnings = [*warnings, *guard_warnings]
             markdown = render_markdown(estimation)
             _annotate(post_span, output={"warnings": [issue.code for issue in warnings]})
+
+    # Exacta y semántica solo tras validar y pasar guardrails; solo si es estimable.
+    if cached is None and estimation is not None and estimation.is_estimable:
+        store(key, content=answered.content, model=answered.model, finish_reason=answered.finish_reason)
+        if prepared.semantic_vector is not None and prepared.semantic_bucket is not None and not history:
+            store_semantic(
+                bucket=prepared.semantic_bucket,
+                vector=prepared.semantic_vector,
+                prompt=prepared.scrubbed_text,
+                content=answered.content,
+                model=answered.model,
+                finish_reason=answered.finish_reason,
+            )
 
     result = TurnResult(
         kind=turn.kind,
@@ -595,6 +669,8 @@ async def _assemble(first: llm_client.LLMResult, prepared: _Prepared, *, transcr
         provider=derive_provider(answered.model),
         trace_id=current_trace_id(),  # Observabilidad: None si Langfuse está apagado.
         cache_hit=cached is not None,
+        cache_kind=prepared.cache_kind if cached is not None else None,
+        cache_similarity=prepared.cache_similarity if cached is not None else None,
         finish_reason=answered.finish_reason,
         dropped_turns=dropped,
         repairs=repairs,

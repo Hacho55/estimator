@@ -62,6 +62,8 @@ def _turn_response(conversation_id: str, turn: int, result, state: ConversationS
         cost_usd=result.cost_usd,
         latency_ms=result.latency_ms,
         cache_hit=result.cache_hit,
+        cache_kind=result.cache_kind,
+        cache_similarity=result.cache_similarity,
         trace_id=result.trace_id,
     )
 
@@ -123,6 +125,8 @@ def _estimate_event(result) -> dict:
         "latency_ms": result.latency_ms,
         "finish_reason": result.finish_reason,
         "cache_hit": result.cache_hit,
+        "cache_kind": getattr(result, "cache_kind", None),
+        "cache_similarity": getattr(result, "cache_similarity", None),
         "prompt_version": result.prompt_version,
     }
 
