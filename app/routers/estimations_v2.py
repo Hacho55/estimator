@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 
 from app.config import get_settings
 from app.prompts.loader import available_versions
-from app.routers.estimations import _estimate_event, _state, _turn_response
+from app.routers.estimations import (
+    _append_turn,
+    _conversation_estimate_event,
+    _estimate_event,
+    _state,
+    _turn_response,
+)
 from app.schemas.conversation import (
-    ChatMessage,
     ConversationDetail,
     ConversationMessageRequest,
     ConversationTurnResponse,
@@ -23,7 +28,7 @@ from app.schemas.estimation import (
 )
 from app.services.errors import ServiceError
 from app.services.llm_service import ContextOverrides, generate_estimation, preview_prompt, stream_estimation
-from app.state.conversations import get_store
+from app.state.conversations import Conversation, get_store
 
 router = APIRouter(prefix="/api/v2", tags=["estimations-v2"])
 
@@ -68,6 +73,21 @@ def _conversation_overrides(conversation) -> ContextOverrides:
     )
 
 
+def _structured_estimate_event(result) -> dict:
+    payload = _estimate_event(result)
+    if result.estimation is not None:
+        estimation = result.estimation
+        payload["estimation_structured"] = (
+            estimation.model_dump() if hasattr(estimation, "model_dump") else estimation
+        )
+    return payload
+
+
+def _require_conversation(conversation_id: str) -> Conversation:
+    """Resuelve la conversación antes del SSE para devolver 404 limpio."""
+    return get_store().get(conversation_id)
+
+
 @router.get("/prompts", response_model=PromptVersionsResponse, operation_id="list_prompt_versions")
 async def list_prompts() -> PromptVersionsResponse:
     settings = get_settings()
@@ -110,10 +130,7 @@ async def estimate_stream(
         if result is None:
             yield ServerSentEvent(data={"error": "service_error", "detail": "Sin estimación."}, event="error")
             return
-        payload = _estimate_event(result)
-        if result.estimation is not None:
-            payload["estimation_structured"] = result.estimation.model_dump()
-        yield ServerSentEvent(data=payload, event="estimate")
+        yield ServerSentEvent(data=_structured_estimate_event(result), event="estimate")
     except ServiceError as exc:
         yield ServerSentEvent(data={"error": exc.code, "detail": exc.message}, event="error")
 
@@ -160,21 +177,59 @@ async def create_conversation(
             overrides=overrides,
             session_id=conversation.id,
         )
-        conversation.messages.append(
-            ChatMessage(role="user", content=request.description, kind="estimation", anchor=True)
-        )
-        conversation.messages.append(
-            ChatMessage(
-                role="assistant",
-                content=result.history_content,
-                kind=result.kind,
-                anchor=result.kind in {"estimation", "estimation_update"},
-            )
+        pairs = _append_turn(
+            conversation, request.description, result, user_kind="estimation", user_anchor=True
         )
         store.touch(conversation)
-        pairs = len(conversation.messages) // 2
         state = _state(pairs, pairs - result.dropped_turns, result.dropped_turns, result.usage.input_tokens)
         return _turn_response(conversation.id, pairs, result, state)
+
+
+@router.post(
+    "/conversations/stream",
+    operation_id="stream_create_conversation_v2",
+    response_class=EventSourceResponse,
+    responses=_ERRORS,
+)
+async def create_conversation_stream(
+    request: FormEstimationRequest,
+    prompt_version: str | None = Query(default=None),
+):
+    overrides = _overrides(request, prompt_version=prompt_version)
+    store = get_store()
+    conversation = store.create()
+    async with conversation.lock:
+        _remember_form(conversation, request, overrides)
+        stream = stream_estimation(
+            request.description,
+            overrides=overrides,
+            session_id=conversation.id,
+        )
+        try:
+            async for piece in stream:
+                if stream.from_cache:
+                    continue
+                yield ServerSentEvent(data=piece, event="token")
+            result = stream.result
+            if result is None:
+                yield ServerSentEvent(
+                    data={"error": "service_error", "detail": "Sin estimación."},
+                    event="error",
+                )
+                return
+            pairs = _append_turn(
+                conversation, request.description, result, user_kind="estimation", user_anchor=True
+            )
+            store.touch(conversation)
+            state = _state(
+                pairs, pairs - result.dropped_turns, result.dropped_turns, result.usage.input_tokens
+            )
+            yield ServerSentEvent(
+                data=_conversation_estimate_event(conversation.id, pairs, result, state),
+                event="estimate",
+            )
+        except ServiceError as exc:
+            yield ServerSentEvent(data={"error": exc.code, "detail": exc.message}, event="error")
 
 
 @router.post(
@@ -193,20 +248,53 @@ async def send_message(conversation_id: str, request: ConversationMessageRequest
             overrides=_conversation_overrides(conversation),
             session_id=conversation.id,
         )
-        conversation.messages.append(ChatMessage(role="user", content=request.message, kind=result.kind))
-        conversation.messages.append(
-            ChatMessage(
-                role="assistant",
-                content=result.history_content,
-                kind=result.kind,
-                anchor=result.kind in {"estimation", "estimation_update"},
-            )
-        )
+        pairs = _append_turn(conversation, request.message, result, user_kind=result.kind)
         store.touch(conversation)
-        pairs = len(conversation.messages) // 2
         in_window = pairs - result.dropped_turns
         state = _state(pairs, in_window, result.dropped_turns, result.usage.input_tokens)
         return _turn_response(conversation.id, pairs, result, state)
+
+
+@router.post(
+    "/conversations/{conversation_id}/messages/stream",
+    operation_id="stream_conversation_message_v2",
+    response_class=EventSourceResponse,
+    responses={**_ERRORS, 404: {"model": ErrorResponse}},
+)
+async def send_message_stream(
+    request: ConversationMessageRequest,
+    conversation: Conversation = Depends(_require_conversation),
+):
+    store = get_store()
+    async with conversation.lock:
+        stream = stream_estimation(
+            request.message,
+            conversation_history=list(conversation.messages),
+            overrides=_conversation_overrides(conversation),
+            session_id=conversation.id,
+        )
+        try:
+            async for piece in stream:
+                if stream.from_cache:
+                    continue
+                yield ServerSentEvent(data=piece, event="token")
+            result = stream.result
+            if result is None:
+                yield ServerSentEvent(
+                    data={"error": "service_error", "detail": "Sin estimación."},
+                    event="error",
+                )
+                return
+            pairs = _append_turn(conversation, request.message, result, user_kind=result.kind)
+            store.touch(conversation)
+            in_window = pairs - result.dropped_turns
+            state = _state(pairs, in_window, result.dropped_turns, result.usage.input_tokens)
+            yield ServerSentEvent(
+                data=_conversation_estimate_event(conversation.id, pairs, result, state),
+                event="estimate",
+            )
+        except ServiceError as exc:
+            yield ServerSentEvent(data={"error": exc.code, "detail": exc.message}, event="error")
 
 
 @router.get(

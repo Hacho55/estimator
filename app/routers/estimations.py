@@ -66,6 +66,41 @@ def _turn_response(conversation_id: str, turn: int, result, state: ConversationS
     )
 
 
+def _append_turn(conversation, user_content: str, result, *, user_kind: str, user_anchor: bool = False) -> int:
+    """Guarda el par user/assistant ya corregido. Devuelve el número de turnos."""
+    conversation.messages.append(
+        ChatMessage(role="user", content=user_content, kind=user_kind, anchor=user_anchor)
+    )
+    conversation.messages.append(
+        ChatMessage(
+            role="assistant",
+            content=result.history_content,
+            kind=result.kind,
+            anchor=result.kind in {"estimation", "estimation_update"},
+        )
+    )
+    return len(conversation.messages) // 2
+
+
+def _conversation_estimate_event(conversation_id: str, turn: int, result, state: ConversationState) -> dict:
+    payload = _estimate_event(result)
+    payload.update(
+        {
+            "conversation_id": conversation_id,
+            "turn": turn,
+            "kind": result.kind,
+            "message": result.message,
+            "conversation_state": state.model_dump(),
+        }
+    )
+    if result.estimation is not None:
+        estimation = result.estimation
+        payload["estimation_structured"] = (
+            estimation.model_dump() if hasattr(estimation, "model_dump") else estimation
+        )
+    return payload
+
+
 @router.post(
     "/estimate",
     response_model=EstimationResponse,
@@ -143,19 +178,10 @@ async def create_conversation(request: ConversationCreateRequest) -> Conversatio
     conversation = store.create()
     async with conversation.lock:
         result = await generate_estimation(request.transcription, session_id=conversation.id)
-        conversation.messages.append(
-            ChatMessage(role="user", content=request.transcription, kind="estimation", anchor=True)
-        )
-        conversation.messages.append(
-            ChatMessage(
-                role="assistant",
-                content=result.history_content,
-                kind=result.kind,
-                anchor=result.kind in {"estimation", "estimation_update"},
-            )
+        pairs = _append_turn(
+            conversation, request.transcription, result, user_kind="estimation", user_anchor=True
         )
         store.touch(conversation)
-        pairs = len(conversation.messages) // 2
         state = _state(pairs, pairs - result.dropped_turns, result.dropped_turns, result.usage.input_tokens)
         return _turn_response(conversation.id, pairs, result, state)
 
@@ -175,17 +201,8 @@ async def send_message(conversation_id: str, request: ConversationMessageRequest
             conversation_history=list(conversation.messages),
             session_id=conversation.id,
         )
-        conversation.messages.append(ChatMessage(role="user", content=request.message, kind=result.kind))
-        conversation.messages.append(
-            ChatMessage(
-                role="assistant",
-                content=result.history_content,
-                kind=result.kind,
-                anchor=result.kind in {"estimation", "estimation_update"},
-            )
-        )
+        pairs = _append_turn(conversation, request.message, result, user_kind=result.kind)
         store.touch(conversation)
-        pairs = len(conversation.messages) // 2
         in_window = pairs - result.dropped_turns
         state = _state(pairs, in_window, result.dropped_turns, result.usage.input_tokens)
         return _turn_response(conversation.id, pairs, result, state)
