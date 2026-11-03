@@ -10,6 +10,7 @@ El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y e
 
 ### Añadido
 
+- El texto del prompt vive en plantillas Jinja2 versionadas (`app/prompts/estimation/v1/`). El loader renderiza system y user; `prompt_builder` solo ordena segmentos, caché e historial. La versión informada sigue siendo `v1-<hash>` del texto renderizado.
 - El front en `web/` es una aplicación Next que lee `POST /api/v1/estimate/stream`: muestra los trozos y, al cerrar, el markdown. Un acierto de caché pinta la estimación de una vez. Los colores y las familias salen de la página de Netretina.
 - `POST /api/v1/estimate/stream` envía cada trozo en un evento `token` y cierra con `estimate`. Un acierto de caché manda solo `estimate`. `POST /api/v1/estimate` no cambia.
 - Cada llamada al modelo deja tres posibles líneas con structlog (`llm_call_started`, `llm_call_completed`, `llm_call_failed`): modelo, proveedor, tokens, coste, latencia, `finish_reason`, si vino de caché y si entró el modelo de reserva. `LOG_FORMAT` sigue eligiendo JSON o consola. El evento `estimation` y Langfuse no cambian.

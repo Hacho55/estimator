@@ -25,8 +25,9 @@ def test_system_order_and_user_transcription():
     ]
     assert positions == sorted(positions)
     assert messages[1]["role"] == "user"
-    assert "<transcription>" in messages[1]["content"]
+    assert "<project_description>" in messages[1]["content"]
     assert "===== ESTIMACIÓN DE REFERENCIA 1 =====" in system
+    assert "phases_table" in system
 
 
 def test_system_is_identical_for_different_transcriptions():

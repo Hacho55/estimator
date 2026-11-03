@@ -1,6 +1,7 @@
 """Contrato de la API de estimación y salida estructurada del modelo."""
 
 from datetime import datetime
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -8,6 +9,34 @@ from pydantic import BaseModel, Field
 from app.config import get_settings
 
 _settings = get_settings()
+
+
+class ProjectType(StrEnum):
+    MOBILE_APP = "mobile_app"
+    WEB_SAAS = "web_saas"
+    INTERNAL_TOOL = "internal_tool"
+    DATA_PIPELINE = "data_pipeline"
+
+
+class DetailLevel(StrEnum):
+    SUMMARY = "summary"
+    MEDIUM = "medium"
+    DETAILED = "detailed"
+
+
+class OutputFormat(StrEnum):
+    PHASES_TABLE = "phases_table"
+    LINE_ITEMS = "line_items"
+    NARRATIVE = "narrative"
+
+
+class PromptRenderRequest(BaseModel):
+    """Datos que rellenan la plantilla. El endpoint v2 los tomará del formulario."""
+
+    description: str
+    project_type: ProjectType | None = None
+    detail_level: DetailLevel = DetailLevel.MEDIUM
+    output_format: OutputFormat = OutputFormat.PHASES_TABLE
 
 
 class EstimationRequest(BaseModel):

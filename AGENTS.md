@@ -5,7 +5,7 @@ Arquitectura CAG: tarifas y estimaciones históricas viajan en cada llamada. No 
 ## Qué archivo se toca
 
 - Contrato HTTP o campos de la respuesta: `app/schemas/`. Cambios que rompan el contrato van a `/api/v2`, no a v1. Los `operation_id` no se renombran.
-- Texto del prompt, orden o caché: `app/services/prompt_builder.py`.
+- Texto del prompt: `app/prompts/estimation/<versión>/*.j2`. Orden, segmentos y caché: `app/services/prompt_builder.py`. Una versión nueva es una carpeta nueva.
 - Forma de los ejemplos dentro del prompt: `app/context/preprocessing.py`.
 - Datos de referencia, sin lógica ni formato: `app/context/examples.py`.
 - Llamada al modelo: solo `app/services/llm_client.py` (`AsyncOpenAI` contra LiteLLM, `chat.completions`).

@@ -49,7 +49,6 @@ from app.services.postprocessor import (
     validate_and_fix,
 )
 from app.services.prompt_builder import (
-    REPAIR_INSTRUCTION,
     apply_cache_strategy,
     build_messages,
     build_preview,
@@ -57,6 +56,7 @@ from app.services.prompt_builder import (
     cacheable_text,
     ensure_alternation,
     prompt_version,
+    repair_instruction,
     system_text_of,
 )
 from app.state.conversations import select_history
@@ -505,7 +505,7 @@ async def _assemble(first: llm_client.LLMResult, prepared: _Prepared, *, transcr
             [
                 *messages,
                 {"role": "assistant", "content": first.content},
-                {"role": "user", "content": REPAIR_INSTRUCTION.format(error=exc.message)},
+                {"role": "user", "content": repair_instruction(exc.message)},
             ]
         )
         second = await llm_client.complete(
