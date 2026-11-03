@@ -1,7 +1,45 @@
-/** Sesión 3 · front: lee el POST SSE. Cada token trae el markdown visible hasta ese momento. */
+/** Lee un POST SSE. Cada token trae el markdown visible hasta ese momento. */
+
+export type PhaseSummary = {
+  phase: string;
+  hours: number;
+  cost_eur: number;
+  weeks: number;
+};
+
+export type DraftTask = {
+  name: string;
+  phase: string;
+  role: string;
+  hours: number;
+  rate_eur: number;
+  cost_eur: number;
+};
+
+export type PhaseAssumptions = {
+  phase: string;
+  assumptions: string[];
+};
+
+export type StructuredEstimation = {
+  project_title: string;
+  summary: string;
+  is_estimable: boolean;
+  not_estimable_reason: string | null;
+  tasks: DraftTask[];
+  total_hours: number;
+  total_cost_eur: number;
+  team: { role: string; count: number; dedication: number }[];
+  duration_weeks_min: number;
+  duration_weeks_max: number;
+  assumptions: string[];
+  risks: string[];
+  phase_assumptions?: PhaseAssumptions[];
+  phases?: PhaseSummary[];
+};
 
 export type EstimatePayload = {
-  estimation: string;
+  estimation: string | null;
   model: string;
   provider: string;
   input_tokens: number;
@@ -10,6 +48,18 @@ export type EstimatePayload = {
   finish_reason: string | null;
   cache_hit: boolean;
   prompt_version: string;
+  conversation_id?: string;
+  turn?: number;
+  kind?: "estimation" | "estimation_update" | "answer";
+  message?: string | null;
+  estimation_structured?: StructuredEstimation | null;
+  conversation_state?: {
+    turns_total: number;
+    turns_in_window: number;
+    turns_dropped: number;
+    approx_input_tokens: number;
+    near_limit: boolean;
+  };
 };
 
 export type StreamHandlers = {
@@ -55,12 +105,16 @@ export function errorDetail(body: unknown): string {
   return "La API no pudo abrir el stream.";
 }
 
-export async function readEstimateStream(transcription: string, handlers: StreamHandlers): Promise<void> {
+export async function readSseStream(
+  path: string,
+  body: unknown,
+  handlers: StreamHandlers,
+): Promise<void> {
   const base = apiBase();
-  const response = await fetch(`${base}/api/v1/estimate/stream`, {
+  const response = await fetch(`${base}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ transcription }),
+    body: JSON.stringify(body),
   });
   if (!response.ok || !response.body) {
     let detail = "La API no pudo abrir el stream.";
@@ -98,6 +152,11 @@ export async function readEstimateStream(transcription: string, handlers: Stream
   const tail = takeEvents(`${buffer}\n\n`);
   for (const item of tail.events) dispatch(item, wrapped);
   if (!settled) handlers.onError("La respuesta se cortó antes de la estimación.");
+}
+
+/** @deprecated Prefer readSseStream with /api/v2. Kept for callers that still hit v1. */
+export async function readEstimateStream(transcription: string, handlers: StreamHandlers): Promise<void> {
+  return readSseStream("/api/v1/estimate/stream", { transcription }, handlers);
 }
 
 function dispatch(item: { event: string; data: unknown }, handlers: StreamHandlers): void {
