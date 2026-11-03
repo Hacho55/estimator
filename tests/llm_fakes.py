@@ -1,6 +1,33 @@
 """Respuestas JSON que el cliente falso devuelve al servicio."""
 
 import json
+from types import SimpleNamespace
+
+
+class FakeResult:
+    def __init__(self, *, cache_hit: bool, markdown: str | None = None, message: str | None = None) -> None:
+        self.cache_hit = cache_hit
+        self.estimation_markdown = markdown
+        self.message = message
+        self.model = "openrouter/openai/gpt-4o-mini"
+        self.latency_ms = 0 if cache_hit else 12
+        self.usage = SimpleNamespace(input_tokens=0 if cache_hit else 8, output_tokens=0 if cache_hit else 3)
+
+
+class FakeStream:
+    def __init__(self, pieces: list[str], result: FakeResult, from_cache: bool) -> None:
+        self._pieces = pieces
+        self.result = None
+        self._result = result
+        self.from_cache = from_cache
+
+    def __aiter__(self):
+        return self._iterate()
+
+    async def _iterate(self):
+        for piece in self._pieces:
+            yield piece
+        self.result = self._result
 
 
 def estimation_payload(**overrides) -> dict:

@@ -4,12 +4,14 @@ El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y e
 
 ## [Unreleased]
 
+### Eliminado
+
+- Streamlit y Chainlit dejan de ser clientes del estimador. El front en `web/` queda como única interfaz.
+
 ### Añadido
 
 - El front en `web/` es una aplicación Next que lee `POST /api/v1/estimate/stream`: muestra los trozos y, al cerrar, el markdown. Un acierto de caché pinta la estimación de una vez. Los colores y las familias salen de la página de Netretina.
 - `POST /api/v1/estimate/stream` envía cada trozo en un evento `token` y cierra con `estimate`. Un acierto de caché manda solo `estimate`. `POST /api/v1/estimate` no cambia.
-- `chainlit_app.py` ofrece la misma conversación que Streamlit: streaming, historial y si la última respuesta salió de caché.
-- `streamlit_app.py` conversa con el mismo estimador, escribe la respuesta por trozos y deja el markdown en el historial. El panel muestra el prompt, el contexto y, de la última llamada, modelo, tokens, latencia y si salió de caché.
 - Cada llamada al modelo deja tres posibles líneas con structlog (`llm_call_started`, `llm_call_completed`, `llm_call_failed`): modelo, proveedor, tokens, coste, latencia, `finish_reason`, si vino de caché y si entró el modelo de reserva. `LOG_FORMAT` sigue eligiendo JSON o consola. El evento `estimation` y Langfuse no cambian.
 - El cliente puede entregar la respuesta del modelo por trozos. Un acierto de caché sale de una vez. Si el stream se corta antes del primer token, vale el modelo de reserva; si ya empezó, no se cambia a mitad. `finish_reason=length` sigue sin guardarse en la caché. `POST /api/v1/estimate` no cambia.
 - La caché de respuestas guarda en memoria, 24 horas, la estimación de una petición idéntica (transcripción, modelo, temperatura, versión del prompt e historial). Un acierto no llama al modelo y la respuesta lo marca en `cache_hit`.
@@ -20,12 +22,9 @@ El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y e
 ### Corregido
 
 - La latencia de un fallback incluye el intento fallido. La caché de respuestas purga lo vencido y no pasa de 256 entradas. El navegador puede borrar una conversación.
-- Streamlit y Chainlit guardan en el historial la estimación corregida, no solo el markdown visible, y no dejan un turno a medias si la llamada falla. También rechazan un texto más largo que el de la API.
 - El front distingue el error de la API, avisa si el stream se corta y recarga el contexto cuando cambia la transcripción. La tabla cabe en una pantalla estrecha.
-- Mientras el modelo escribe, Streamlit, Chainlit y el front muestran el markdown de la estimación. El JSON no se pinta. Al cerrar, sigue el texto ya validado.
+- Mientras el modelo escribe, el front muestra el markdown de la estimación. El JSON no se pinta. Al cerrar, sigue el texto ya validado.
 - En el front, la tabla de tareas se pinta como tabla. Tras la llamada se ven modelo, tokens, latencia y si salió de caché. El prompt y el contexto inyectado se abren con «Ver contexto».
-- Streamlit ofrece «Nueva conversación» para vaciar el chat sin recargar la página.
-- Chainlit muestra el prompt del sistema como texto. Con la caché del prefijo llegaba como lista de bloques y el panel lateral fallaba.
 - El navegador del front puede llamar a la API desde `localhost` o `127.0.0.1` en cualquier puerto. La estimación en pantalla usa la misma tipografía que el formulario.
 - El CI deja de podar la caché de uv al terminar. Ese paso fallaba con el código 2 después de que estructura, ruff, tests, arranque y presupuesto ya habían pasado.
 - El experimento llama al modelo dentro de un solo bucle de asyncio. Cada caso abría y cerraba el suyo, y la segunda llamada fallaba con `Event loop is closed`.

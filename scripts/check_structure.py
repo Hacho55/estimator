@@ -46,8 +46,6 @@ REQUIRED = [
     "experiments/CONCLUSIONES.md",
     "scripts/smoke_test.sh",
     "scripts/run_experiment.py",
-    "streamlit_app.py",
-    "chainlit_app.py",
     "web/package.json",
     "web/app/page.tsx",
     "web/app/Markdown.tsx",

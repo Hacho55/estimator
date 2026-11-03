@@ -439,7 +439,7 @@ def stream_estimation(
     overrides: ContextOverrides | None = None,
     session_id: str | None = None,
 ) -> EstimationStream:
-    """Sesión 3 · streaming: lo que Streamlit y Chainlit iteran. El POST sigue en generate_estimation."""
+    """Sesión 3 · streaming: lo que el front y el SSE iteran. El POST sigue en generate_estimation."""
     return EstimationStream(
         transcription,
         conversation_history,

@@ -3,8 +3,8 @@
 import json
 
 from app.services.errors import LLMOutputTruncatedError
+from tests.llm_fakes import FakeResult, FakeStream
 from tests.test_estimate import TRANSCRIPTION
-from tests.test_streamlit_app import _FakeResult, _FakeStream
 
 
 def _events(body: str) -> list[tuple[str, str]]:
@@ -26,13 +26,13 @@ def _events(body: str) -> list[tuple[str, str]]:
 
 
 def test_stream_sends_tokens_and_then_the_estimate(client, monkeypatch):
-    result = _FakeResult(cache_hit=False, markdown="## Estimación: Hecha")
+    result = FakeResult(cache_hit=False, markdown="## Estimación: Hecha")
     result.finish_reason = "stop"
     result.provider = "openai"
     result.prompt_version = "v1-test"
     monkeypatch.setattr(
         "app.routers.estimations.stream_estimation",
-        lambda transcription, history=None: _FakeStream(["hola ", "mundo"], result, from_cache=False),
+        lambda transcription, history=None: FakeStream(["hola ", "mundo"], result, from_cache=False),
     )
     with client.stream("POST", "/api/v1/estimate/stream", json={"transcription": TRANSCRIPTION}) as response:
         assert response.status_code == 200
@@ -49,13 +49,13 @@ def test_stream_sends_tokens_and_then_the_estimate(client, monkeypatch):
 
 
 def test_cache_hit_sends_only_the_estimate(client, monkeypatch):
-    result = _FakeResult(cache_hit=True, markdown="## Estimación: Panel")
+    result = FakeResult(cache_hit=True, markdown="## Estimación: Panel")
     result.finish_reason = "stop"
     result.provider = "openai"
     result.prompt_version = "v1-test"
     monkeypatch.setattr(
         "app.routers.estimations.stream_estimation",
-        lambda transcription, history=None: _FakeStream(["{json}"], result, from_cache=True),
+        lambda transcription, history=None: FakeStream(["{json}"], result, from_cache=True),
     )
     with client.stream("POST", "/api/v1/estimate/stream", json={"transcription": TRANSCRIPTION}) as response:
         body = "".join(response.iter_text())

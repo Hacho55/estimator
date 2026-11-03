@@ -19,9 +19,6 @@ logs/
 experiments/results/*
 !experiments/results/.gitkeep
 
-.chainlit/
-.files/
-
 web/node_modules/
 web/.next/
 web/*.tsbuildinfo

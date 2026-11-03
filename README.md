@@ -37,20 +37,6 @@ uv run uvicorn app.main:app --reload
 
 Queda en `http://127.0.0.1:8000`. Para pararlo, `Ctrl+C` en esa terminal.
 
-La interfaz de conversación no necesita ese proceso:
-
-```bash
-uv run streamlit run streamlit_app.py
-```
-
-Usa el mismo `.env`. La clave no va en el código.
-
-La misma conversación, con Chainlit:
-
-```bash
-uv run chainlit run chainlit_app.py
-```
-
 El front, en otra carpeta, consume el stream de la API. Primero tiene que estar uvicorn en el puerto 8000. Si el 3000 está ocupado, Next elige otro; la API acepta `localhost` y `127.0.0.1` en el puerto que salga:
 
 ```bash
