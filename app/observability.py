@@ -62,6 +62,7 @@ def setup_observability(app) -> None:
     logger.propagate = False
     app.add_middleware(RequestIdMiddleware)
     configure_call_logs()
+    configure_langfuse()
 
 
 def log_event(event: str, **fields) -> None:
@@ -160,6 +161,65 @@ def log_llm_failed(
 
 # --- Trazas de Langfuse. Quien llama no tiene que comprobar si hay claves. ---
 
+_langfuse_configured = False
+
+
+def _mask_trace_value(data):
+    """Aplica el mismo filtro de PII que los guardrails a lo que sale hacia Langfuse."""
+    from app.services.guardrails import redact_pii
+
+    if isinstance(data, str):
+        return redact_pii(data)[0]
+    if isinstance(data, dict):
+        return {key: _mask_trace_value(value) for key, value in data.items()}
+    if isinstance(data, list):
+        return [_mask_trace_value(item) for item in data]
+    if isinstance(data, tuple):
+        return tuple(_mask_trace_value(item) for item in data)
+    return data
+
+
+def _mask_langfuse(*, data, **_kwargs):
+    return _mask_trace_value(data)
+
+
+def _mask_otel_spans(*, params):
+    from langfuse.types import MaskOtelSpansResult, OtelSpanPatch
+
+    patches = {}
+    for identifier, span in params.spans.items():
+        replacements = {}
+        for key, value in span.attributes.items():
+            if not isinstance(value, str):
+                continue
+            masked = _mask_trace_value(value)
+            if masked != value:
+                replacements[key] = masked
+        if replacements:
+            patches[identifier] = OtelSpanPatch(set_attributes=replacements)
+    return MaskOtelSpansResult(span_patches=patches) if patches else None
+
+
+def configure_langfuse(settings=None) -> None:
+    """Crea el cliente con máscaras de PII. Idempotente; hay que llamarlo antes del wrapper OpenAI."""
+    global _langfuse_configured
+    if _langfuse_configured:
+        return
+    settings = settings or get_settings()
+    if not settings.langfuse_enabled:
+        return
+    from langfuse import Langfuse
+
+    Langfuse(
+        public_key=settings.LANGFUSE_PUBLIC_KEY,
+        secret_key=settings.LANGFUSE_SECRET_KEY.get_secret_value(),
+        base_url=settings.LANGFUSE_BASE_URL,
+        environment=settings.APP_ENV,
+        mask=_mask_langfuse,
+        mask_otel_spans=_mask_otel_spans,
+    )
+    _langfuse_configured = True
+
 
 @contextmanager
 def traced_span(name: str, *, as_type: str = "span"):
@@ -168,6 +228,7 @@ def traced_span(name: str, *, as_type: str = "span"):
     if not settings.langfuse_enabled:
         yield None
         return
+    configure_langfuse()
     from langfuse import get_client
 
     with get_client().start_as_current_observation(as_type=as_type, name=name) as observation:
@@ -192,6 +253,7 @@ def estimation_trace(
     if not settings.langfuse_enabled:
         yield None
         return
+    configure_langfuse()
     from langfuse import get_client, propagate_attributes
 
     request_id = request_id_var.get()

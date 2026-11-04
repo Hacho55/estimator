@@ -175,7 +175,12 @@ def _redis_client():
             overwrite=False,
         )
         _redis_cache = (cache, Tag)
-        log.info("semantic_cache_redis_ready", url=settings.REDIS_URL)
+        from urllib.parse import urlparse
+
+        parsed = urlparse(settings.REDIS_URL)
+        host = parsed.hostname or "unknown"
+        db = (parsed.path or "/").lstrip("/") or "0"
+        log.info("semantic_cache_redis_ready", host=host, db=db)
         return _redis_cache
     except Exception as exc:  # noqa: BLE001
         _redis_failed = True

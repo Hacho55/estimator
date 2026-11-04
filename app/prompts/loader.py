@@ -38,7 +38,7 @@ class UnknownPromptVersionError(ValueError):
     """La carpeta de versión pedida no existe."""
 
 
-_REQUIRED_TEMPLATES = ("system.j2", "user.j2", "reminder.j2", "repair.j2")
+_REQUIRED_TEMPLATES = ("system.j2", "user.j2", "reminder.j2", "repair.j2", "examples.j2")
 
 
 def available_versions() -> list[str]:

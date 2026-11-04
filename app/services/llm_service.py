@@ -756,7 +756,23 @@ def _history_that_fits(transcription, block, history, overrides, model):
     if not history:
         return [], 0
     settings = get_settings()
-    fixed = _budget(build_messages(transcription, block), block, transcription, [], model)
+    prompt_label = overrides.prompt_version or settings.LLM_PROMPT_VERSION or DEFAULT_PROMPT_VERSION
+    form_detail = overrides.form_detail_level or DetailLevel.MEDIUM
+    output_format = overrides.output_format or OutputFormat.PHASES_TABLE
+    fixed = _budget(
+        build_messages(
+            transcription,
+            block,
+            prompt_label=prompt_label,
+            detail_level=form_detail,  # type: ignore[arg-type]
+            output_format=output_format,  # type: ignore[arg-type]
+            project_type=overrides.project_type,
+        ),
+        block,
+        transcription,
+        [],
+        model,
+    )
     room = (
         settings.MODEL_CONTEXT_WINDOW
         - settings.CONTEXT_SAFETY_MARGIN_TOKENS

@@ -49,6 +49,22 @@ def test_rounds_hours_to_multiples_of_five_and_flags_rate():
     assert estimation.tasks[0].cost_eur == 2000
 
 
+def test_cost_aligned_after_hours_round_even_within_tolerance():
+    """Horas redondeadas: el coste se recalcula siempre, aunque el desvío sea ≤1%."""
+    payload = estimation_payload()
+    payload["tasks"][0]["hours"] = 10.05
+    payload["tasks"][0]["rate_eur"] = 100
+    payload["tasks"][0]["cost_eur"] = 1005.0
+    estimation, issues = validate_and_fix(
+        parse_turn(
+            json.dumps({"kind": "estimation", "message": "ok", "estimation": payload})
+        ).estimation
+    )
+    assert estimation.tasks[0].hours == 10
+    assert estimation.tasks[0].cost_eur == 1000.0
+    assert "hours_not_multiple_of_5" in {issue.code for issue in issues}
+
+
 def test_duration_warning_does_not_change_the_range():
     payload = estimation_payload(duration_weeks_min=20, duration_weeks_max=30)
     estimation, issues = validate_and_fix(parse_turn(json.dumps({

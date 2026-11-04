@@ -156,7 +156,9 @@ def test_presidio_redacts_person_name():
         pytest.skip("Presidio o el modelo spaCy no están disponibles")
     redacted, entities, used = redact_pii("María López pedirá la demo la semana que viene.")
     assert used == "presidio"
-    assert "María López" not in redacted or "PERSON" in entities
+    assert engine is not None
+    assert "María López" not in redacted
+    assert "<PERSONA>" in redacted or "PERSON" in entities
 
 
 def test_v1_estimate_still_works_with_guardrails(client, fake_llm):
@@ -235,3 +237,12 @@ def test_validation_error_uses_error_response(client):
     assert body["error"] == "validation_error"
     assert "detail" in body
     assert "transcription" in body["detail"].lower() or "string" in body["detail"].lower()
+
+
+def test_langfuse_mask_redacts_nested_pii():
+    from app.observability import _mask_langfuse
+
+    masked = _mask_langfuse(data={"text": "Escribe a ana@cliente.com", "n": 1})
+    assert "<EMAIL>" in masked["text"]
+    assert "ana@cliente.com" not in masked["text"]
+    assert masked["n"] == 1

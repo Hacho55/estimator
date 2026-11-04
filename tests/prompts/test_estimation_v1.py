@@ -88,11 +88,12 @@ def test_available_versions_skips_incomplete_folders(tmp_path, monkeypatch) -> N
     root = tmp_path / "estimation"
     complete = root / "v9"
     complete.mkdir(parents=True)
-    for name in ("system.j2", "user.j2", "reminder.j2", "repair.j2"):
+    for name in ("system.j2", "user.j2", "reminder.j2", "repair.j2", "examples.j2"):
         (complete / name).write_text("ok", encoding="utf-8")
     incomplete = root / "v-broken"
     incomplete.mkdir()
-    (incomplete / "system.j2").write_text("solo system", encoding="utf-8")
+    for name in ("system.j2", "user.j2", "reminder.j2", "repair.j2"):
+        (incomplete / name).write_text("falta examples", encoding="utf-8")
     monkeypatch.setattr(loader, "_BASE_DIR", tmp_path)
     assert loader.available_versions() == ["v9"]
 

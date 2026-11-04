@@ -29,6 +29,7 @@ El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y e
 
 ### Corregido
 
+- Langfuse aplica las mismas máscaras de PII a generaciones OpenAI y a input/output del SDK; el log de Redis ya no incluye credenciales. El postprocesador alinea siempre `cost_eur` tras redondear horas. `available_versions` exige también `examples.j2`. El recorte de historial usa la versión y el formulario reales. Create v1 limpia conversaciones vacías; create/message tienen `max_length`. OpenAPI v1 documenta 422 como `ErrorResponse`.
 - El historial de conversación y las trazas de Langfuse guardan la descripción ya tachada; los mensajes `answer` y la caché exacta/semántica usan el turno postprocesado. `available_versions` exige las cuatro plantillas. Los 422 de validación FastAPI salen como `ErrorResponse`. Al crear una conversación, un fallo antes de escribir turnos la descarta en `finally`. El front borra la conversación al volver al formulario y pinta el equipo de la estimación.
 - La versión de prompt inválida en streams de v2 responde 422 con `ErrorResponse` (antes rompía el SSE). Las conversaciones vacías tras un fallo del primer turno se descartan.
 - La caché exacta distingue `project_type`, detalle y formato del formulario. El repair usa la carpeta de prompt pedida. El borrador en streaming pasa por el mismo filtro de PII que la salida final. La caché semántica en memoria tiene tope de entradas.

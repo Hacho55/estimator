@@ -27,6 +27,7 @@ router = APIRouter(prefix="/api/v1", tags=["estimations"])
 
 _ERRORS = {
     413: {"model": ErrorResponse},
+    422: {"model": ErrorResponse},
     502: {"model": ErrorResponse},
     504: {"model": ErrorResponse},
 }
@@ -181,14 +182,23 @@ async def context_info(include_text: bool = False) -> ContextInfo:
 async def create_conversation(request: ConversationCreateRequest) -> ConversationTurnResponse:
     store = get_store()
     conversation = store.create()
-    async with conversation.lock:
-        result = await generate_estimation(request.transcription, session_id=conversation.id)
-        pairs = _append_turn(
-            conversation, request.transcription, result, user_kind="estimation", user_anchor=True
-        )
-        store.touch(conversation)
-        state = _state(pairs, pairs - result.dropped_turns, result.dropped_turns, result.usage.input_tokens)
-        return _turn_response(conversation.id, pairs, result, state)
+    committed = False
+    try:
+        async with conversation.lock:
+            result = await generate_estimation(request.transcription, session_id=conversation.id)
+            pairs = _append_turn(
+                conversation, request.transcription, result, user_kind="estimation", user_anchor=True
+            )
+            store.touch(conversation)
+            committed = True
+            state = _state(pairs, pairs - result.dropped_turns, result.dropped_turns, result.usage.input_tokens)
+            return _turn_response(conversation.id, pairs, result, state)
+    finally:
+        if not committed and not conversation.messages:
+            try:
+                store.delete(conversation.id)
+            except ServiceError:
+                pass
 
 
 @router.post(

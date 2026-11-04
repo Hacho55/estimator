@@ -186,6 +186,10 @@ def test_redisvl_roundtrip(monkeypatch):
         pytest.skip("REDIS_URL no configurada")
     reset_semantic_cache()
     monkeypatch.setattr(settings, "SEMANTIC_CACHE_MODE", "on")
+    import app.state.semantic_cache as semantic_cache
+
+    if semantic_cache._redis_client() is None:
+        pytest.fail("REDIS_URL está definida pero el backend Redis no arrancó")
     bucket = "redis-test-bucket"
     vector = [0.01] * settings.EMBEDDING_DIMS
     store_semantic(
@@ -196,5 +200,6 @@ def test_redisvl_roundtrip(monkeypatch):
         model="m",
         finish_reason="stop",
     )
+    assert semantic_cache._redis_client() is not None
     hit = lookup_semantic(bucket=bucket, vector=vector)
     assert hit is not None

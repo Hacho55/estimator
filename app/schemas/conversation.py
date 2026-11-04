@@ -4,8 +4,11 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.config import get_settings
 from app.schemas.context import TokenBudget
 from app.schemas.estimation import Estimation, UsageInfo, ValidationIssue
+
+_settings = get_settings()
 
 
 class ChatMessage(BaseModel):
@@ -19,12 +22,18 @@ class ConversationCreateRequest(BaseModel):
     transcription: str = Field(
         ...,
         min_length=50,
+        max_length=_settings.TRANSCRIPTION_MAX_CHARS,
         description="Transcripción de la reunión con la que empieza la conversación",
     )
 
 
 class ConversationMessageRequest(BaseModel):
-    message: str = Field(..., min_length=1, description="Ajuste o pregunta sobre la estimación")
+    message: str = Field(
+        ...,
+        min_length=1,
+        max_length=_settings.TRANSCRIPTION_MAX_CHARS,
+        description="Ajuste o pregunta sobre la estimación",
+    )
 
 
 class ConversationState(BaseModel):

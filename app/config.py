@@ -88,6 +88,12 @@ def get_settings() -> Settings:
     # os.environ antes de importar el SDK.
     if settings.langfuse_enabled and not os.environ.get("LANGFUSE_TRACING_ENVIRONMENT"):
         os.environ["LANGFUSE_TRACING_ENVIRONMENT"] = settings.APP_ENV
+    if settings.langfuse_enabled:
+        # Máscaras de PII antes de que llm_client importe langfuse.openai.
+        # Se pasa settings para no reentrar en get_settings (lru_cache aún vacío).
+        from app.observability import configure_langfuse
+
+        configure_langfuse(settings)
     return settings
 
 

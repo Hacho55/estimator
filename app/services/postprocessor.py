@@ -172,9 +172,8 @@ def validate_and_fix(
                     expected_cost,
                 )
             )
-            task["cost_eur"] = expected_cost
-        elif expected_cost == 0 and cost != 0:
-            task["cost_eur"] = 0
+        # Tras redondear horas, el coste debe cuadrar siempre; la tolerancia solo avisa.
+        task["cost_eur"] = expected_cost
 
     total_hours = round(sum(float(task["hours"]) for task in data["tasks"]), 2)
     total_cost = round(sum(float(task["cost_eur"]) for task in data["tasks"]), 2)

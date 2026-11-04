@@ -147,6 +147,8 @@ El SDK instalado es Langfuse Python 5, el vigente para Langfuse Cloud v4. `APP_E
 | POST | `/api/v2/conversations/stream` | Igual, en SSE |
 | POST | `/api/v2/conversations/{id}/messages` | Turno de ajuste o pregunta |
 | POST | `/api/v2/conversations/{id}/messages/stream` | Turno en SSE |
+| GET | `/api/v2/conversations/{id}` | Historial |
+| DELETE | `/api/v2/conversations/{id}` | Borra la conversación |
 
 El cuerpo de `POST /api/v1/estimate` y de `POST /api/v1/conversations` es `{"transcription": "..."}`. El de v2 es el formulario tipado; `prompt_version` va en query. Un mensaje siguiente es `{"message": "..."}`. Los streams responden con `token` y cierran con `estimate` (o `error`). Un acierto de caché manda solo `estimate`.
 
