@@ -106,7 +106,8 @@ export default function Page() {
     };
   }, []);
 
-  function resetToForm() {
+  async function resetToForm() {
+    const id = conversationId;
     setConversationId(null);
     setFollowUp("");
     setDraft("");
@@ -115,6 +116,12 @@ export default function Page() {
     setAnswer(null);
     setError("");
     setContextOpen(false);
+    if (!id) return;
+    try {
+      await fetch(`${apiBase()}/api/v2/conversations/${id}`, { method: "DELETE" });
+    } catch {
+      // El formulario ya está limpio; un DELETE fallido solo deja basura en memoria del API.
+    }
   }
 
   function applyEstimate(payload: EstimatePayload, format: OutputFormat) {

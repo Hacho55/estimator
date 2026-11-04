@@ -70,8 +70,9 @@ def _turn_response(conversation_id: str, turn: int, result, state: ConversationS
 
 def _append_turn(conversation, user_content: str, result, *, user_kind: str, user_anchor: bool = False) -> int:
     """Guarda el par user/assistant ya corregido. Devuelve el número de turnos."""
+    stored_user = getattr(result, "scrubbed_input", None) or user_content
     conversation.messages.append(
-        ChatMessage(role="user", content=user_content, kind=user_kind, anchor=user_anchor)
+        ChatMessage(role="user", content=stored_user, kind=user_kind, anchor=user_anchor)
     )
     conversation.messages.append(
         ChatMessage(

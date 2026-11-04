@@ -38,11 +38,21 @@ class UnknownPromptVersionError(ValueError):
     """La carpeta de versión pedida no existe."""
 
 
+_REQUIRED_TEMPLATES = ("system.j2", "user.j2", "reminder.j2", "repair.j2")
+
+
 def available_versions() -> list[str]:
+    """Solo carpetas con las cuatro plantillas del estimador."""
     root = _BASE_DIR / "estimation"
     if not root.is_dir():
         return []
-    return sorted(path.name for path in root.iterdir() if path.is_dir() and not path.name.startswith("."))
+    versions: list[str] = []
+    for path in root.iterdir():
+        if not path.is_dir() or path.name.startswith("."):
+            continue
+        if all((path / name).is_file() for name in _REQUIRED_TEMPLATES):
+            versions.append(path.name)
+    return sorted(versions)
 
 
 def _value(field: object) -> str | None:

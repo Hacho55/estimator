@@ -29,6 +29,7 @@ El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y e
 
 ### Corregido
 
+- El historial de conversación y las trazas de Langfuse guardan la descripción ya tachada; los mensajes `answer` y la caché exacta/semántica usan el turno postprocesado. `available_versions` exige las cuatro plantillas. Los 422 de validación FastAPI salen como `ErrorResponse`. Al crear una conversación, un fallo antes de escribir turnos la descarta en `finally`. El front borra la conversación al volver al formulario y pinta el equipo de la estimación.
 - La versión de prompt inválida en streams de v2 responde 422 con `ErrorResponse` (antes rompía el SSE). Las conversaciones vacías tras un fallo del primer turno se descartan.
 - La caché exacta distingue `project_type`, detalle y formato del formulario. El repair usa la carpeta de prompt pedida. El borrador en streaming pasa por el mismo filtro de PII que la salida final. La caché semántica en memoria tiene tope de entradas.
 - La latencia de un fallback incluye el intento fallido. La caché de respuestas purga lo vencido y no pasa de 256 entradas. El navegador puede borrar una conversación.

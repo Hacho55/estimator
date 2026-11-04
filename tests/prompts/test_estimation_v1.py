@@ -82,6 +82,21 @@ def test_available_versions_includes_v1() -> None:
     assert "v1" in available_versions()
 
 
+def test_available_versions_skips_incomplete_folders(tmp_path, monkeypatch) -> None:
+    import app.prompts.loader as loader
+
+    root = tmp_path / "estimation"
+    complete = root / "v9"
+    complete.mkdir(parents=True)
+    for name in ("system.j2", "user.j2", "reminder.j2", "repair.j2"):
+        (complete / name).write_text("ok", encoding="utf-8")
+    incomplete = root / "v-broken"
+    incomplete.mkdir()
+    (incomplete / "system.j2").write_text("solo system", encoding="utf-8")
+    monkeypatch.setattr(loader, "_BASE_DIR", tmp_path)
+    assert loader.available_versions() == ["v9"]
+
+
 def test_system_splits_into_cache_segments() -> None:
     block = build_context_block()
     messages = build_messages("Reunión suficientemente larga para estimar el proyecto descrito.", block)

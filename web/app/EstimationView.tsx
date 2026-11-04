@@ -163,6 +163,18 @@ function Lists({
 }) {
   return (
     <>
+      {estimation.team?.length ? (
+        <>
+          <h3>Equipo</h3>
+          <ul>
+            {estimation.team.map((member) => (
+              <li key={member.role}>
+                {member.count}× {member.role} ({Math.round(member.dedication * 100)}%)
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : null}
       {estimation.assumptions?.length ? (
         <>
           <h3>Supuestos</h3>

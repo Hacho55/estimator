@@ -181,6 +181,7 @@ async def create_conversation(
     overrides = _overrides(request, prompt_version=prompt_version)
     store = get_store()
     conversation = store.create()
+    committed = False
     try:
         async with conversation.lock:
             _remember_form(conversation, request, overrides)
@@ -193,11 +194,12 @@ async def create_conversation(
                 conversation, request.description, result, user_kind="estimation", user_anchor=True
             )
             store.touch(conversation)
+            committed = True
             state = _state(pairs, pairs - result.dropped_turns, result.dropped_turns, result.usage.input_tokens)
             return _turn_response(conversation.id, pairs, result, state)
-    except ServiceError:
-        _discard_empty(conversation.id)
-        raise
+    finally:
+        if not committed:
+            _discard_empty(conversation.id)
 
 
 @router.post(
@@ -213,6 +215,7 @@ async def create_conversation_stream(
     overrides = _overrides(request, prompt_version=prompt_version)
     store = get_store()
     conversation = store.create()
+    committed = False
     async with conversation.lock:
         _remember_form(conversation, request, overrides)
         stream = stream_estimation(
@@ -227,7 +230,6 @@ async def create_conversation_stream(
                 yield ServerSentEvent(data=piece, event="token")
             result = stream.result
             if result is None:
-                _discard_empty(conversation.id)
                 yield ServerSentEvent(
                     data={"error": "service_error", "detail": "Sin estimación."},
                     event="error",
@@ -237,6 +239,7 @@ async def create_conversation_stream(
                 conversation, request.description, result, user_kind="estimation", user_anchor=True
             )
             store.touch(conversation)
+            committed = True
             state = _state(
                 pairs, pairs - result.dropped_turns, result.dropped_turns, result.usage.input_tokens
             )
@@ -245,8 +248,10 @@ async def create_conversation_stream(
                 event="estimate",
             )
         except ServiceError as exc:
-            _discard_empty(conversation.id)
             yield ServerSentEvent(data={"error": exc.code, "detail": exc.message}, event="error")
+        finally:
+            if not committed:
+                _discard_empty(conversation.id)
 
 
 @router.post(

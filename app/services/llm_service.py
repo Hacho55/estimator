@@ -153,6 +153,7 @@ class TurnResult:
     finish_reason: str | None = None
     dropped_turns: int = 0
     repairs: int = 0
+    scrubbed_input: str = ""
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     def to_estimation_response(self) -> EstimationResponse:
@@ -226,6 +227,21 @@ def _require_kind(turn, has_history: bool) -> None:
         )
 
 
+def _scrub_history(messages: list[ChatMessage]) -> list[ChatMessage]:
+    """Tacha PII de mensajes de usuario ya guardados antes de reenviarlos al modelo."""
+    cleaned: list[ChatMessage] = []
+    for message in messages:
+        if message.role != "user":
+            cleaned.append(message)
+            continue
+        text, _entities, _engine = redact_pii(message.content)
+        if text == message.content:
+            cleaned.append(message)
+        else:
+            cleaned.append(message.model_copy(update={"content": text}))
+    return cleaned
+
+
 async def generate_estimation(
     transcription: str,
     conversation_history: list[ChatMessage] | None = None,
@@ -235,7 +251,8 @@ async def generate_estimation(
 ) -> TurnResult:
     settings = get_settings()
     overrides = overrides or ContextOverrides()
-    model = overrides.model or choose_model(transcription, has_history=bool(conversation_history))
+    scrubbed = guard_input(transcription)
+    model = overrides.model or choose_model(scrubbed, has_history=bool(conversation_history))
     provider = derive_provider(model)
     # Observabilidad: etiquetas de la traza. No viajan al modelo.
     tags = [
@@ -250,10 +267,10 @@ async def generate_estimation(
         session_id,
         tags,
         {"model": model, "provider": provider},
-        transcription=transcription,
+        transcription=scrubbed,
     ):
         return await _generate(
-            transcription,
+            scrubbed,
             conversation_history,
             overrides=overrides,
             model=model,
@@ -336,7 +353,9 @@ def _prepare(
     provider: str,
 ) -> _Prepared:
     settings = get_settings()
+    # El caller ya filtró la entrada actual; se vuelve a aplicar por si llega cruda.
     transcription = guard_input(transcription)
+    history_source = _scrub_history(list(conversation_history or []))
     # Observabilidad: el span anota el paso. _context_for es el trabajo del estimador.
     with traced_span("build-context") as context_span:
         block = _context_for(transcription, overrides)
@@ -350,7 +369,7 @@ def _prepare(
             },
         )
 
-    history, dropped = _history_that_fits(transcription, block, conversation_history or [], overrides, model)
+    history, dropped = _history_that_fits(transcription, block, history_source, overrides, model)
     prompt_label = overrides.prompt_version or settings.LLM_PROMPT_VERSION or DEFAULT_PROMPT_VERSION
     form_detail = overrides.form_detail_level or DetailLevel.MEDIUM
     output_format = overrides.output_format or OutputFormat.PHASES_TABLE
@@ -484,7 +503,9 @@ class EstimationStream:
     async def _iterate(self):
         settings = get_settings()
         overrides = self.overrides
-        model = overrides.model or choose_model(self.transcription, has_history=bool(self.conversation_history))
+        scrubbed = guard_input(self.transcription)
+        self.transcription = scrubbed
+        model = overrides.model or choose_model(scrubbed, has_history=bool(self.conversation_history))
         provider = derive_provider(model)
         tags = [
             "estimation",
@@ -497,10 +518,10 @@ class EstimationStream:
             self.session_id,
             tags,
             {"model": model, "provider": provider},
-            transcription=self.transcription,
+            transcription=scrubbed,
         ):
             prepared = _prepare(
-                self.transcription,
+                scrubbed,
                 self.conversation_history,
                 overrides=overrides,
                 model=model,
@@ -511,7 +532,7 @@ class EstimationStream:
                 self.from_cache = True
                 _log_cache_hit(prepared.cached, prepared.budget.total_input)
                 first = _cached_result(prepared.cached)
-                self.result = await _assemble(first, prepared, transcription=self.transcription, model=model)
+                self.result = await _assemble(first, prepared, transcription=scrubbed, model=model)
                 yield self.result.estimation_markdown or self.result.message or ""
             else:
                 tokens = llm_client.TokenStream(
@@ -529,13 +550,13 @@ class EstimationStream:
                     preview = preview_markdown(raw)
                     if preview and preview != shown:
                         # Mismos filtros de PII que la salida final, antes de pintar el borrador.
-                        scrubbed, _entities, _engine = redact_pii(preview)
-                        yield scrubbed
+                        preview_safe, _entities, _engine = redact_pii(preview)
+                        yield preview_safe
                         shown = preview
                 if tokens.result is None:
                     raise LLMUnavailableError("El modelo no envió una respuesta.")
                 first = tokens.result
-                self.result = await _assemble(first, prepared, transcription=self.transcription, model=model)
+                self.result = await _assemble(first, prepared, transcription=scrubbed, model=model)
 
 
 def stream_estimation(
@@ -631,6 +652,11 @@ async def _assemble(first: llm_client.LLMResult, prepared: _Prepared, *, transcr
             cost = (cost or 0) + second.cost_usd
         answered = second
 
+    if turn.message:
+        scrubbed_message, _entities, _engine = redact_pii(turn.message)
+        if scrubbed_message != turn.message:
+            turn = turn.model_copy(update={"message": scrubbed_message})
+
     estimation = None
     warnings: list[ValidationIssue] = []
     markdown = None
@@ -646,15 +672,18 @@ async def _assemble(first: llm_client.LLMResult, prepared: _Prepared, *, transcr
             markdown = render_markdown(estimation)
             _annotate(post_span, output={"warnings": [issue.code for issue in warnings]})
 
+    history_content = to_history_content(turn, estimation)
+
     # Exacta y semántica solo tras validar y pasar guardrails; solo si es estimable.
+    # Se guarda el turno ya postprocesado (mismo JSON que el historial), no el bruto del modelo.
     if cached is None and estimation is not None and estimation.is_estimable:
-        store(key, content=answered.content, model=answered.model, finish_reason=answered.finish_reason)
+        store(key, content=history_content, model=answered.model, finish_reason=answered.finish_reason)
         if prepared.semantic_vector is not None and prepared.semantic_bucket is not None and not history:
             store_semantic(
                 bucket=prepared.semantic_bucket,
                 vector=prepared.semantic_vector,
                 prompt=prepared.scrubbed_text,
-                content=answered.content,
+                content=history_content,
                 model=answered.model,
                 finish_reason=answered.finish_reason,
             )
@@ -665,7 +694,7 @@ async def _assemble(first: llm_client.LLMResult, prepared: _Prepared, *, transcr
         estimation_markdown=markdown,
         estimation=estimation,
         warnings=warnings,
-        history_content=to_history_content(turn, estimation),
+        history_content=history_content,
         prompt_version=version,
         context=ContextMeta(
             format=block.format,
@@ -687,6 +716,7 @@ async def _assemble(first: llm_client.LLMResult, prepared: _Prepared, *, transcr
         finish_reason=answered.finish_reason,
         dropped_turns=dropped,
         repairs=repairs,
+        scrubbed_input=transcription,
     )
     # Observabilidad: la estimación ya está en result. Esto solo puntúa y registra.
     scores = collect_metrics(

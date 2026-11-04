@@ -164,3 +164,74 @@ def test_v1_estimate_still_works_with_guardrails(client, fake_llm):
     fake_llm["scripts"][:] = [{"content": estimation_turn(), "finish_reason": "stop"}]
     response = client.post("/api/v1/estimate", json={"transcription": TRANSCRIPTION})
     assert response.status_code == 200
+
+
+def test_conversation_stores_scrubbed_user_text(client, fake_llm):
+    reset_store()
+    fake_llm["scripts"][:] = [
+        {"content": estimation_turn(), "finish_reason": "stop"},
+        {"content": estimation_turn("answer", message="Respuesta sin datos."), "finish_reason": "stop"},
+    ]
+    description = TRANSCRIPTION + " Contacto: ana.garcia@example.com"
+    created = client.post(
+        "/api/v2/conversations",
+        json={
+            "description": description,
+            "project_type": "web_saas",
+            "detail_level": "medium",
+            "output_format": "phases_table",
+        },
+    )
+    assert created.status_code == 200, created.text
+    conversation_id = created.json()["conversation_id"]
+    follow = client.post(
+        f"/api/v2/conversations/{conversation_id}/messages",
+        json={"message": "¿Cuánto dura? Escribe a jefe@cliente.com"},
+    )
+    assert follow.status_code == 200, follow.text
+    detail = client.get(f"/api/v2/conversations/{conversation_id}")
+    assert detail.status_code == 200
+    users = [m for m in detail.json()["messages"] if m["role"] == "user"]
+    assert all("ana.garcia@example.com" not in m["content"] for m in users)
+    assert all("jefe@cliente.com" not in m["content"] for m in users)
+    assert any("<EMAIL>" in m["content"] for m in users)
+
+
+def test_answer_message_is_redacted(client, fake_llm):
+    reset_store()
+    fake_llm["scripts"][:] = [
+        {"content": estimation_turn(), "finish_reason": "stop"},
+        {
+            "content": estimation_turn(
+                "answer",
+                message="Contacta a ana.garcia@example.com para el kickoff.",
+            ),
+            "finish_reason": "stop",
+        },
+    ]
+    created = client.post(
+        "/api/v2/conversations",
+        json={
+            "description": TRANSCRIPTION,
+            "project_type": "web_saas",
+            "detail_level": "medium",
+            "output_format": "phases_table",
+        },
+    )
+    conversation_id = created.json()["conversation_id"]
+    follow = client.post(
+        f"/api/v2/conversations/{conversation_id}/messages",
+        json={"message": "¿A quién escribo?"},
+    )
+    assert follow.status_code == 200, follow.text
+    assert "ana.garcia@example.com" not in follow.json()["message"]
+    assert "<EMAIL>" in follow.json()["message"]
+
+
+def test_validation_error_uses_error_response(client):
+    response = client.post("/api/v1/estimate", json={"transcription": "corta"})
+    assert response.status_code == 422
+    body = response.json()
+    assert body["error"] == "validation_error"
+    assert "detail" in body
+    assert "transcription" in body["detail"].lower() or "string" in body["detail"].lower()

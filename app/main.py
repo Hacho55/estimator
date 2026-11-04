@@ -3,6 +3,7 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -43,6 +44,19 @@ app.include_router(estimations_v2.router)
 async def handle_service_error(_request, exc: ServiceError) -> JSONResponse:
     body = ErrorResponse(error=exc.code, detail=exc.message)
     return JSONResponse(status_code=exc.status_code, content=body.model_dump())
+
+
+@app.exception_handler(RequestValidationError)
+async def handle_validation_error(_request, exc: RequestValidationError) -> JSONResponse:
+    """Misma forma ErrorResponse que el resto de 422 del estimador."""
+    parts: list[str] = []
+    for err in exc.errors():
+        loc = ".".join(str(part) for part in err.get("loc", ()) if part != "body")
+        msg = err.get("msg", "inválido")
+        parts.append(f"{loc}: {msg}" if loc else str(msg))
+    detail = "; ".join(parts) or "Datos de entrada inválidos."
+    body = ErrorResponse(error="validation_error", detail=detail)
+    return JSONResponse(status_code=422, content=body.model_dump())
 
 
 @app.get("/health", operation_id="health")
