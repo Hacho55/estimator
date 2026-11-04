@@ -26,7 +26,7 @@ from app.schemas.estimation import (
     PromptPreview,
     PromptVersionsResponse,
 )
-from app.services.errors import ServiceError
+from app.services.errors import PromptVersionError, ServiceError
 from app.services.llm_service import ContextOverrides, generate_estimation, preview_prompt, stream_estimation
 from app.state.conversations import Conversation, get_store
 
@@ -40,21 +40,32 @@ _ERRORS = {
 }
 
 
-def _overrides(
-    request: FormEstimationRequest,
-    *,
-    prompt_version: str | None,
-) -> ContextOverrides:
+def _resolved_prompt_version(prompt_version: str | None = Query(default=None)) -> str:
+    """Valida la carpeta de prompt antes de abrir SSE o llamar al modelo."""
     settings = get_settings()
     version = prompt_version or settings.LLM_PROMPT_VERSION
     if version not in available_versions():
-        raise HTTPException(status_code=422, detail=f"No existe la versión de prompt '{version}'.")
+        raise PromptVersionError(f"No existe la versión de prompt '{version}'.")
+    return version
+
+
+def _overrides(request: FormEstimationRequest, *, prompt_version: str) -> ContextOverrides:
     return ContextOverrides(
-        prompt_version=version,
+        prompt_version=prompt_version,
         form_detail_level=request.detail_level,
         output_format=request.output_format,
         project_type=request.project_type,
     )
+
+
+def _discard_empty(conversation_id: str) -> None:
+    store = get_store()
+    try:
+        conversation = store.get(conversation_id)
+    except ServiceError:
+        return
+    if not conversation.messages:
+        store.delete(conversation_id)
 
 
 def _remember_form(conversation, request: FormEstimationRequest, overrides: ContextOverrides) -> None:
@@ -102,7 +113,7 @@ async def list_prompts() -> PromptVersionsResponse:
 )
 async def estimate(
     request: FormEstimationRequest,
-    prompt_version: str | None = Query(default=None),
+    prompt_version: str = Depends(_resolved_prompt_version),
 ) -> EstimationResponse:
     overrides = _overrides(request, prompt_version=prompt_version)
     result = await generate_estimation(request.description, overrides=overrides)
@@ -117,7 +128,7 @@ async def estimate(
 )
 async def estimate_stream(
     request: FormEstimationRequest,
-    prompt_version: str | None = Query(default=None),
+    prompt_version: str = Depends(_resolved_prompt_version),
 ):
     overrides = _overrides(request, prompt_version=prompt_version)
     stream = stream_estimation(request.description, overrides=overrides)
@@ -143,7 +154,7 @@ async def estimate_stream(
 )
 async def preview_estimation(
     request: FormEstimationRequest,
-    prompt_version: str | None = Query(default=None),
+    prompt_version: str = Depends(_resolved_prompt_version),
 ) -> PromptPreview:
     if get_settings().APP_ENV != "development":
         raise HTTPException(status_code=404, detail="Disponible solo en development.")
@@ -165,24 +176,28 @@ async def preview_estimation(
 )
 async def create_conversation(
     request: FormEstimationRequest,
-    prompt_version: str | None = Query(default=None),
+    prompt_version: str = Depends(_resolved_prompt_version),
 ) -> ConversationTurnResponse:
     overrides = _overrides(request, prompt_version=prompt_version)
     store = get_store()
     conversation = store.create()
-    async with conversation.lock:
-        _remember_form(conversation, request, overrides)
-        result = await generate_estimation(
-            request.description,
-            overrides=overrides,
-            session_id=conversation.id,
-        )
-        pairs = _append_turn(
-            conversation, request.description, result, user_kind="estimation", user_anchor=True
-        )
-        store.touch(conversation)
-        state = _state(pairs, pairs - result.dropped_turns, result.dropped_turns, result.usage.input_tokens)
-        return _turn_response(conversation.id, pairs, result, state)
+    try:
+        async with conversation.lock:
+            _remember_form(conversation, request, overrides)
+            result = await generate_estimation(
+                request.description,
+                overrides=overrides,
+                session_id=conversation.id,
+            )
+            pairs = _append_turn(
+                conversation, request.description, result, user_kind="estimation", user_anchor=True
+            )
+            store.touch(conversation)
+            state = _state(pairs, pairs - result.dropped_turns, result.dropped_turns, result.usage.input_tokens)
+            return _turn_response(conversation.id, pairs, result, state)
+    except ServiceError:
+        _discard_empty(conversation.id)
+        raise
 
 
 @router.post(
@@ -193,7 +208,7 @@ async def create_conversation(
 )
 async def create_conversation_stream(
     request: FormEstimationRequest,
-    prompt_version: str | None = Query(default=None),
+    prompt_version: str = Depends(_resolved_prompt_version),
 ):
     overrides = _overrides(request, prompt_version=prompt_version)
     store = get_store()
@@ -212,6 +227,7 @@ async def create_conversation_stream(
                 yield ServerSentEvent(data=piece, event="token")
             result = stream.result
             if result is None:
+                _discard_empty(conversation.id)
                 yield ServerSentEvent(
                     data={"error": "service_error", "detail": "Sin estimación."},
                     event="error",
@@ -229,6 +245,7 @@ async def create_conversation_stream(
                 event="estimate",
             )
         except ServiceError as exc:
+            _discard_empty(conversation.id)
             yield ServerSentEvent(data={"error": exc.code, "detail": exc.message}, event="error")
 
 

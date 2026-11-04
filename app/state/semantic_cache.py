@@ -19,6 +19,7 @@ from app.observability import log_event, record_scores
 log = structlog.get_logger(__name__)
 
 TTL_SECONDS = 24 * 60 * 60
+MAX_ENTRIES = 256
 INDEX_NAME = "estimation_cache"
 
 
@@ -117,6 +118,8 @@ def _memory_store(
     model: str,
     finish_reason: str | None,
 ) -> str:
+    now = time.time()
+    _expire_memory(now)
     entry_id = uuid.uuid4().hex
     _memory.append(
         _MemoryEntry(
@@ -126,9 +129,11 @@ def _memory_store(
             model=model,
             finish_reason=finish_reason,
             entry_id=entry_id,
-            expires_at=time.time() + TTL_SECONDS,
+            expires_at=now + TTL_SECONDS,
         )
     )
+    while len(_memory) > MAX_ENTRIES:
+        _memory.pop(0)
     return entry_id
 
 

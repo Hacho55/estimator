@@ -41,9 +41,13 @@ function plainContent(content: unknown): string {
     .join("\n");
 }
 
-async function loadContext(form: FormValues, promptVersion: string): Promise<ContextView> {
+async function loadContext(
+  form: FormValues,
+  promptVersion: string | null,
+  signal?: AbortSignal,
+): Promise<ContextView> {
   const base = apiBase();
-  const contextResponse = await fetch(`${base}/api/v1/context?include_text=true`);
+  const contextResponse = await fetch(`${base}/api/v1/context?include_text=true`, { signal });
   if (!contextResponse.ok) throw new Error("No se pudo leer el contexto.");
   const context = (await contextResponse.json()) as { text?: string | null };
   let system = "";
@@ -56,6 +60,7 @@ async function loadContext(form: FormValues, promptVersion: string): Promise<Con
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(form),
+      signal,
     });
     if (previewResponse.status === 404) previewUnavailable = true;
     else if (previewResponse.ok) {
@@ -69,8 +74,8 @@ async function loadContext(form: FormValues, promptVersion: string): Promise<Con
 
 export default function Page() {
   const [form, setForm] = useState<FormValues>(EMPTY_FORM);
-  const [promptVersion, setPromptVersion] = useState("v1");
-  const [promptVersions, setPromptVersions] = useState<string[]>(["v1"]);
+  const [promptVersion, setPromptVersion] = useState<string | null>(null);
+  const [promptVersions, setPromptVersions] = useState<string[]>([]);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [followUp, setFollowUp] = useState("");
@@ -93,7 +98,7 @@ export default function Page() {
         const body = (await response.json()) as { versions: string[]; default: string };
         if (cancelled) return;
         setPromptVersions(body.versions.length ? body.versions : ["v1"]);
-        setPromptVersion(body.default || "v1");
+        // Se deja null: el servidor aplica LLM_PROMPT_VERSION. El usuario puede fijar una.
       })
       .catch(() => undefined);
     return () => {
@@ -185,17 +190,20 @@ export default function Page() {
 
   useEffect(() => {
     if (!contextOpen) return;
-    let cancelled = false;
+    const controller = new AbortController();
     setContextError("");
-    loadContext(form, promptVersion)
-      .then((value) => {
-        if (!cancelled) setContext(value);
-      })
-      .catch(() => {
-        if (!cancelled) setContextError("No se pudo leer el contexto.");
-      });
+    const timer = window.setTimeout(() => {
+      loadContext(form, promptVersion, controller.signal)
+        .then((value) => setContext(value))
+        .catch((error: unknown) => {
+          if (controller.signal.aborted) return;
+          setContextError("No se pudo leer el contexto.");
+          void error;
+        });
+    }, 300);
     return () => {
-      cancelled = true;
+      controller.abort();
+      window.clearTimeout(timer);
     };
   }, [contextOpen, form, promptVersion]);
 
@@ -280,7 +288,12 @@ export default function Page() {
             <summary>Opciones avanzadas</summary>
             <label>
               Versión de prompt
-              <select value={promptVersion} onChange={(event) => setPromptVersion(event.target.value)}>
+              <select
+                value={promptVersion ?? ""}
+                onChange={(event) => setPromptVersion(event.target.value || null)}
+                disabled={!promptVersions.length}
+              >
+                <option value="">Por defecto del servidor</option>
                 {promptVersions.map((version) => (
                   <option key={version} value={version}>
                     {version}
@@ -319,7 +332,8 @@ export default function Page() {
         <section className="context">
           {contextError ? <p className="error">{contextError}</p> : null}
           <p className="meta">
-            Versión {promptVersion} · {form.project_type} · {form.detail_level} · {form.output_format}
+            Versión {promptVersion ?? "por defecto"} · {form.project_type} · {form.detail_level} ·{" "}
+            {form.output_format}
           </p>
           <h2>System prompt</h2>
           <pre>{promptText()}</pre>

@@ -92,7 +92,15 @@ def test_estimate_v2_with_v2_prompt(client, fake_llm):
 def test_unknown_prompt_version_is_422(client):
     response = client.post("/api/v2/estimate", params={"prompt_version": "v999"}, json=FORM)
     assert response.status_code == 422
-    assert "v999" in response.text
+    body = response.json()
+    assert body["error"] == "unknown_prompt_version"
+    assert "v999" in body["detail"]
+
+
+def test_unknown_prompt_version_on_stream_is_422(client):
+    response = client.post("/api/v2/estimate/stream", params={"prompt_version": "v999"}, json=FORM)
+    assert response.status_code == 422
+    assert response.json()["error"] == "unknown_prompt_version"
 
 
 def test_v1_and_v2_have_distinct_hashes_and_cache_keys():

@@ -46,7 +46,7 @@ from app.services.errors import (
     LLMUnavailableError,
     PromptVersionError,
 )
-from app.services.guardrails import guard_input, guard_output
+from app.services.guardrails import guard_input, guard_output, redact_pii
 from app.services.postprocessor import (
     parse_turn,
     preview_markdown,
@@ -276,11 +276,18 @@ class _Prepared:
     form_detail_level: object = DetailLevel.MEDIUM
     output_format: object = OutputFormat.PHASES_TABLE
     project_type: object | None = None
+    prompt_label: str = DEFAULT_PROMPT_VERSION
     cache_kind: str | None = None
     cache_similarity: float | None = None
     semantic_vector: list[float] | None = None
     semantic_bucket: str | None = None
     scrubbed_text: str = ""
+
+
+def _field_value(field: object | None) -> str | None:
+    if field is None:
+        return None
+    return field.value if hasattr(field, "value") else str(field)
 
 
 def _log_cache_hit(cached, estimated_input_tokens: int) -> None:
@@ -378,13 +385,16 @@ def _prepare(
         )
         _annotate(prompt_span, output={"prompt_version": version, "messages": len(messages)})
 
-    # Sesión 3 · caché: la clave incluye el historial para no mezclar turnos.
+    # Sesión 3 · caché: la clave incluye el historial y las opciones del formulario.
     key = cache_key(
         transcription=transcription,
         model=model,
         temperature=settings.LLM_TEMPERATURE,
         prompt_version=version,
         history=history,
+        project_type=_field_value(overrides.project_type),
+        form_detail_level=_field_value(form_detail),
+        output_format=_field_value(output_format),
     )
     cached = lookup(key)
     return _Prepared(
@@ -401,6 +411,7 @@ def _prepare(
         form_detail_level=form_detail,
         output_format=output_format,
         project_type=overrides.project_type,
+        prompt_label=prompt_label,
         cache_kind="exact" if cached is not None else None,
         scrubbed_text=transcription,
     )
@@ -517,7 +528,9 @@ class EstimationStream:
                     raw += piece
                     preview = preview_markdown(raw)
                     if preview and preview != shown:
-                        yield preview
+                        # Mismos filtros de PII que la salida final, antes de pintar el borrador.
+                        scrubbed, _entities, _engine = redact_pii(preview)
+                        yield scrubbed
                         shown = preview
                 if tokens.result is None:
                     raise LLMUnavailableError("El modelo no envió una respuesta.")
@@ -599,7 +612,7 @@ async def _assemble(first: llm_client.LLMResult, prepared: _Prepared, *, transcr
             [
                 *messages,
                 {"role": "assistant", "content": first.content},
-                {"role": "user", "content": repair_instruction(exc.message)},
+                {"role": "user", "content": repair_instruction(exc.message, prepared.prompt_label)},
             ]
         )
         second = await llm_client.complete(

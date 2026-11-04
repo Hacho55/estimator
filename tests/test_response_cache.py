@@ -44,6 +44,9 @@ def test_history_changes_the_key():
     assert cache_key(**shared, history=[]) != cache_key(**{**shared, "model": "otro"}, history=[])
     assert cache_key(**shared, history=[]) != cache_key(**{**shared, "temperature": 0.9}, history=[])
     assert cache_key(**shared, history=[]) != cache_key(**{**shared, "prompt_version": "v2"}, history=[])
+    assert cache_key(**shared, history=[], project_type="web_saas") != cache_key(
+        **shared, history=[], project_type="mobile_app"
+    )
 
 
 def test_expired_entry_is_a_miss(monkeypatch):

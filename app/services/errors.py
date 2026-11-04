@@ -56,6 +56,9 @@ class PromptVersionError(ServiceError):
     status_code = 422
     code = "unknown_prompt_version"
 
+    def __init__(self, message: str | None = None) -> None:
+        super().__init__(message or "No existe esa versión de prompt.")
+
 
 class InputRejectedError(ServiceError):
     status_code = 422

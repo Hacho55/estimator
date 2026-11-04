@@ -18,8 +18,8 @@ El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y e
 - Tras el bloque `<scope>` y los condicionales del formulario, las huellas vigentes son `v1-fffb730b` y `v2-80fa5ba0` (detalle medium, formato phases_table).
 - `Estimation` calcula `phases` a partir de las tareas. `phase_assumptions` es opcional y, con detalle `detailed`, su ausencia deja un aviso.
 - El texto del prompt vive en plantillas Jinja2 versionadas (`app/prompts/estimation/v1/`). El loader renderiza system y user; `prompt_builder` solo ordena segmentos, caché e historial. La versión informada sigue siendo `v1-<hash>` del texto renderizado.
-- El front en `web/` es una aplicación Next que lee `POST /api/v1/estimate/stream`: muestra los trozos y, al cerrar, el markdown. Un acierto de caché pinta la estimación de una vez. Los colores y las familias salen de la página de Netretina.
-- `POST /api/v1/estimate/stream` envía cada trozo en un evento `token` y cierra con `estimate`. Un acierto de caché manda solo `estimate`. `POST /api/v1/estimate` no cambia.
+- El front en `web/` es una aplicación Next. Desde la sesión 4 habla con `/api/v2/conversations/stream` (formulario tipado); el stream de v1 (`POST /api/v1/estimate/stream`) sigue disponible para clientes que solo envían `transcription`.
+- `POST /api/v1/estimate/stream` y los streams de v2 envían cada trozo en un evento `token` y cierran con `estimate`. Un acierto de caché manda solo `estimate`.
 - Cada llamada al modelo deja tres posibles líneas con structlog (`llm_call_started`, `llm_call_completed`, `llm_call_failed`): modelo, proveedor, tokens, coste, latencia, `finish_reason`, si vino de caché y si entró el modelo de reserva. `LOG_FORMAT` sigue eligiendo JSON o consola. El evento `estimation` y Langfuse no cambian.
 - El cliente puede entregar la respuesta del modelo por trozos. Un acierto de caché sale de una vez. Si el stream se corta antes del primer token, vale el modelo de reserva; si ya empezó, no se cambia a mitad. `finish_reason=length` sigue sin guardarse en la caché. `POST /api/v1/estimate` no cambia.
 - La caché de respuestas guarda en memoria, 24 horas, la estimación de una petición idéntica (transcripción, modelo, temperatura, versión del prompt e historial). Un acierto no llama al modelo y la respuesta lo marca en `cache_hit`.
@@ -29,6 +29,8 @@ El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y e
 
 ### Corregido
 
+- La versión de prompt inválida en streams de v2 responde 422 con `ErrorResponse` (antes rompía el SSE). Las conversaciones vacías tras un fallo del primer turno se descartan.
+- La caché exacta distingue `project_type`, detalle y formato del formulario. El repair usa la carpeta de prompt pedida. El borrador en streaming pasa por el mismo filtro de PII que la salida final. La caché semántica en memoria tiene tope de entradas.
 - La latencia de un fallback incluye el intento fallido. La caché de respuestas purga lo vencido y no pasa de 256 entradas. El navegador puede borrar una conversación.
 - El front distingue el error de la API, avisa si el stream se corta y recarga el contexto cuando cambia la transcripción. La tabla cabe en una pantalla estrecha.
 - Mientras el modelo escribe, el front muestra el markdown de la estimación. El JSON no se pinta. Al cerrar, sigue el texto ya validado.

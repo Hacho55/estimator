@@ -33,12 +33,18 @@ def cache_key(
     temperature: float,
     prompt_version: str,
     history: list,
+    project_type: str | None = None,
+    form_detail_level: str | None = None,
+    output_format: str | None = None,
 ) -> str:
     payload = {
         "transcription": transcription,
         "model": model,
         "temperature": temperature,
         "prompt_version": prompt_version,
+        "project_type": project_type,
+        "form_detail_level": form_detail_level,
+        "output_format": output_format,
         "history": [{"role": message.role, "content": message.content} for message in history],
     }
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))

@@ -247,6 +247,24 @@ def guard_output(estimation: Estimation) -> tuple[Estimation, list[ValidationIss
                 task[key] = redacted
                 changed = True
                 entities_seen.extend(entities)
+    for member in data.get("team") or []:
+        value = str(member.get("role") or "")
+        if not value:
+            continue
+        redacted, entities, _engine = redact_pii(value)
+        if redacted != value:
+            member["role"] = redacted
+            changed = True
+            entities_seen.extend(entities)
+    for phase in data.get("phases") or []:
+        value = str(phase.get("phase") or "")
+        if not value:
+            continue
+        redacted, entities, _engine = redact_pii(value)
+        if redacted != value:
+            phase["phase"] = redacted
+            changed = True
+            entities_seen.extend(entities)
     for key in ("assumptions", "risks"):
         items = data.get(key) or []
         new_items = []
@@ -258,6 +276,13 @@ def guard_output(estimation: Estimation) -> tuple[Estimation, list[ValidationIss
                 entities_seen.extend(entities)
         data[key] = new_items
     for entry in data.get("phase_assumptions") or []:
+        phase_name = str(entry.get("phase") or "")
+        if phase_name:
+            redacted_phase, entities, _engine = redact_pii(phase_name)
+            if redacted_phase != phase_name:
+                entry["phase"] = redacted_phase
+                changed = True
+                entities_seen.extend(entities)
         notes = []
         for item in entry.get("assumptions") or []:
             redacted, entities, _engine = redact_pii(str(item))
