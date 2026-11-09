@@ -29,7 +29,7 @@ Menos es más. El preprocesamiento anonimiza, normaliza y calcula los totales; e
 
 ## Revisión
 
-La conclusión del experimento de contexto está en `experiments/CONCLUSIONES.md`. Ideas reutilizables de las sesiones 2–4: `docs/insights.md`.
+La conclusión del experimento de contexto está en `experiments/CONCLUSIONES.md`. Ideas reutilizables de las sesiones 2–5: `docs/insights.md`.
 
 ## Secretos y verificación
 
