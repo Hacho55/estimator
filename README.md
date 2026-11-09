@@ -44,7 +44,7 @@ uv run uvicorn app.main:app --reload
 
 Queda en `http://127.0.0.1:8000`. Para pararlo, `Ctrl+C` en esa terminal.
 
-El front Next abre con el formulario tipado y habla con `/api/v2` (SSE). Primero tiene que estar uvicorn en el puerto 8000. Si el 3000 está ocupado, Next elige otro; la API acepta `localhost` y `127.0.0.1` en el puerto que salga:
+El front Next abre con el formulario tipado, crea una sesión (`POST /sessions`) y envía la transcripción y los adjuntos a `/sessions/{id}/estimate`. Primero tiene que estar uvicorn en el puerto 8000. Si el 3000 está ocupado, Next elige otro; la API acepta `localhost` y `127.0.0.1` en el puerto que salga:
 
 ```bash
 cd web && npm install && npm run dev
@@ -109,6 +109,9 @@ Cada cambio en `.env` exige reiniciar uvicorn. La configuración se lee una vez 
 | `CONTEXT_SAFETY_MARGIN_TOKENS` | no | `5000` | `0` o más | Hueco que se reserva antes de llamar al modelo |
 | `TRANSCRIPTION_MAX_CHARS` | no | `40000` | mayor que 50 | Largo máximo del texto de entrada |
 | `CONVERSATION_MAX_TURNS` | no | `10` | entero mayor que 0 | Pares recientes que se conservan, además de las anclas |
+| `SESSION_MAX_TURNS` | no | `6` | entero mayor que 0 | Pares de una sesión. Al pasarse, se tiran los más viejos. Sin anclas |
+| `ATTACHMENT_MAX_FILES` | no | `5` | entero mayor que 0 | Adjuntos por petición en `/sessions/{id}/estimate` |
+| `ATTACHMENT_MAX_BYTES` | no | `5000000` | entero mayor que 0 | Tamaño máximo de cada adjunto |
 | `CONVERSATION_TTL_MINUTES` | no | `60` | entero mayor que 0 | Vida de una conversación en memoria |
 | `CONVERSATION_MAX_ACTIVE` | no | `1000` | entero mayor que 0 | Conversaciones simultáneas. Al pasarse, se elimina la más antigua |
 | `CONVERSATION_NEAR_LIMIT_RATIO` | no | `0.8` | entre 0 y 1 | A partir de qué fracción de la ventana `near_limit` pasa a `true` |
@@ -179,6 +182,28 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/conversations/EL_ID/messages \
   -H "Content-Type: application/json" \
   -d '{"message": "Sube el diseño a 60 horas y añade una fase de testing."}'
 ```
+
+## Sesiones
+
+`POST /sessions` devuelve un `session_id` (UUID v4). `POST /sessions/{session_id}/estimate` acepta `multipart/form-data`: `transcript`, `project_type`, `detail_level`, `output_format` y `attachments` (PDF o Word, opcionales). La respuesta trae la estimación validada y `project_metadata`.
+
+La sesión vive en memoria del proceso, sin base de datos y sin Redis. Se pierde al reiniciar, caduca con `CONVERSATION_TTL_MINUTES` y no pasa de `CONVERSATION_MAX_ACTIVE`. Hace falta un solo worker. El historial guarda solo pares user/assistant (`SESSION_MAX_TURNS`, por defecto 6). El system prompt no cuenta como turno: se regenera en cada llamada con el bloque `<project_metadata>` de la plantilla `v3`. `/api/v1` y `/api/v2` siguen con su ventana de anclas y no usan este almacén.
+
+Los tests, incluidos los de sesión, corren con:
+
+```bash
+uv run pytest
+```
+
+### Adjuntos (camino B)
+
+El texto se extrae en el proceso con `pypdf` (PDF) y `python-docx` (Word) y se concatena a la transcripción con `--- attachment: nombre ---`. No se llama a la Files API.
+
+Se probó el otro camino contra el proxy: un PDF mínimo como bloque `type: file` con `file_data` en base64, por `chat.completions`. El modelo del entorno (`openrouter/anthropic/claude-sonnet-5.5`) y el de reserva (`openrouter/anthropic/claude-haiku-4.5`) devolvieron el código impreso en el PDF. No basta como camino único: un `.docx` no viaja en ese bloque, y el ejercicio pide un solo camino para PDF y Word.
+
+### project_metadata
+
+Tras cada estimación hay una segunda llamada, con el prompt `app/prompts/metadata/v1/`. Recibe los hechos anteriores, el turno ya tachado y un resumen de la estimación, y devuelve `project_name`, `assumed_team_size`, `mentioned_technologies` y `agreed_scope`. Si esa llamada falla, se conserva el metadata anterior y la estimación se devuelve igual. Esos hechos se inyectan en `<project_metadata>` del system prompt `v3` en el turno siguiente. En el primero el bloque va vacío. «Ver prompt base» en el front muestra la plantilla `v3` del formulario, sin el historial ni los adjuntos de la sesión. Los tokens, el coste y la latencia de la respuesta suman la estimación y esta segunda llamada.
 
 El contrato v1 admite campos nuevos opcionales. Renombrar, quitar o cambiar el tipo de un campo exige `/api/v2` con su propio router, mientras v1 sigue respondiendo. Los `operation_id` no se renombran.
 

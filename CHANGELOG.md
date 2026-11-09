@@ -10,6 +10,7 @@ El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y e
 
 ### Añadido
 
+- `POST /sessions` y `POST /sessions/{id}/estimate` (multipart). La sesión guarda el historial con ventana de `SESSION_MAX_TURNS` (defecto 6, sin anclas) y, aparte, `project_metadata`. Los adjuntos PDF y Word se leen en local (`pypdf`, `python-docx`) y se concatenan a la transcripción. Una segunda llamada (`app/prompts/metadata/v1/`) actualiza los hechos; si falla, se conservan los anteriores. El system prompt de las sesiones es la carpeta `v3` (`v3-` más el hash del texto renderizado), con el bloque `<project_metadata>`.
 - `/api/v2` publica el formulario tipado (`description`, `project_type`, `detail_level`, `output_format`) y `GET /api/v2/prompts`. La carpeta de plantilla se elige con `prompt_version` (query) o `LLM_PROMPT_VERSION` (defecto `v1`). La variante `v2` pide nombrar el ejemplo de referencia en los supuestos; el experimento `prompt-v2` la compara con `baseline`.
 - `POST /api/v2/conversations/stream` y `.../messages/stream` envían `token` y cierran con `estimate` (incluye `conversation_id`, `turn`, `kind`, `conversation_state` y `estimation_structured`). El historial solo se escribe tras un cierre correcto.
 - El front Next abre con el formulario tipado (descripción, tipo, detalle, formato), elige la versión de prompt en opciones avanzadas, crea la conversación por SSE y dibuja `estimation_structured` según el formato. Tras la primera estimación admite un ajuste o pregunta sin reescribir el prompt.
@@ -29,6 +30,7 @@ El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y e
 
 ### Corregido
 
+- La sesión lee cada adjunto solo hasta `ATTACHMENT_MAX_BYTES`, limita el texto extraído y sanea el nombre que entra en el prompt. El recorte por tokens de la sesión tira los pares viejos, sin anclas. La respuesta suma tokens, coste y latencia de la llamada de metadatos. El almacén caduca y tiene el mismo cupo que las conversaciones. «Nueva conversación» invalida el `session_id` antes de pedir otro.
 - Langfuse aplica las mismas máscaras de PII a generaciones OpenAI y a input/output del SDK; el log de Redis ya no incluye credenciales. El postprocesador alinea siempre `cost_eur` tras redondear horas. `available_versions` exige también `examples.j2`. El recorte de historial usa la versión y el formulario reales. Create v1 limpia conversaciones vacías; create/message tienen `max_length`. OpenAPI v1 documenta 422 como `ErrorResponse`.
 - El historial de conversación y las trazas de Langfuse guardan la descripción ya tachada; los mensajes `answer` y la caché exacta/semántica usan el turno postprocesado. `available_versions` exige las cuatro plantillas. Los 422 de validación FastAPI salen como `ErrorResponse`. Al crear una conversación, un fallo antes de escribir turnos la descarta en `finally`. El front borra la conversación al volver al formulario y pinta el equipo de la estimación.
 - La versión de prompt inválida en streams de v2 responde 422 con `ErrorResponse` (antes rompía el SSE). Las conversaciones vacías tras un fallo del primer turno se descartan.
