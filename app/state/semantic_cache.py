@@ -6,6 +6,7 @@ redisvl intenta Redis; si falla, la petición sigue sin caché semántica.
 
 from __future__ import annotations
 
+import hashlib
 import math
 import time
 import uuid
@@ -236,8 +237,9 @@ def store_semantic(
     if redis is not None:
         cache, _tag = redis
         try:
+            # El match es por vector: el texto no se guarda en Redis, solo su huella.
             return cache.store(
-                prompt=prompt,
+                prompt=hashlib.sha256(prompt.encode()).hexdigest(),
                 response=content,
                 vector=vector,
                 metadata={"model": model, "finish_reason": finish_reason},
