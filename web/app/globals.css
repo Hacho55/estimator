@@ -307,3 +307,43 @@ button:disabled {
   background: var(--surface-muted);
   padding: 0.1em 0.35em;
 }
+
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  gap: 16px;
+  align-items: start;
+}
+
+.metadata {
+  background: var(--surface);
+  border: 1px solid var(--surface-muted);
+  border-top: 4px solid var(--accent);
+  padding: 16px;
+}
+
+.metadata h2 {
+  margin: 0 0 8px;
+  font-size: 1rem;
+}
+
+.metadata dl {
+  display: grid;
+  gap: 12px;
+  margin: 12px 0 0;
+}
+
+.metadata dt {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.metadata dd {
+  margin: 2px 0 0;
+}
+
+@media (max-width: 800px) {
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+}
