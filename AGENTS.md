@@ -2,6 +2,10 @@
 
 Arquitectura CAG: tarifas y estimaciones históricas viajan en cada llamada. No hay base de datos ni retrieval.
 
+## Referencia del curso (LIDR)
+
+Material de enseñanza en `/Users/horaciosuarez/DEVS/AI-Eng/lidr-ai-engineering` (`LIDR-academy-temp/ai-engineering`). Consulta para ideas y conceptos; no obliga a paridad. Ver `CONSULTA.md` allí y la regla `.cursor/rules/lidr-curso-referencia.mdc`. Ramas `session_N` / `session_N_live`.
+
 ## Qué archivo se toca
 
 - Contrato HTTP o campos de la respuesta: `app/schemas/`. Cambios que rompan el contrato van a `/api/v2`, no a v1. Los `operation_id` no se renombran.

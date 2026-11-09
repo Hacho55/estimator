@@ -1,0 +1,30 @@
+---
+description: Consultar el repo de enseñanza LIDR al diseñar o revisar el estimador (ideas y conceptos, no copia obligatoria).
+alwaysApply: true
+---
+
+# Referencia del curso LIDR
+
+El material de enseñanza del Master está clonado en:
+
+`/Users/horaciosuarez/DEVS/AI-Eng/lidr-ai-engineering`
+
+(remoto: `LIDR-academy-temp/ai-engineering`). Guía local: `lidr-ai-engineering/CONSULTA.md`.
+
+## Cuándo consultarlo
+
+- Antes de diseñar o revisar algo alineado con una sesión del curso (prompts Jinja, formulario tipado, guardrails, caché semántica, streaming, front del estimador, etc.).
+- Para contrastar un concepto o ver cómo lo resolvió el directo (`session_N_live` / `session_0N_live`) frente a la base (`session_N`).
+- Si el usuario habla de “el repo de LIDR”, “la referencia del curso” o “cómo lo hacen ellos”.
+
+## Cómo usarlo
+
+1. Leer `CONSULTA.md` y, si hace falta, cambiar a la rama de la sesión (`git checkout session_4_live`, etc.).
+2. Mirar sobre todo `estimator/` (API Python). `estimator-web/` es Rails; nuestro front es `web/` (Next).
+3. Extraer ideas o corregir malentendidos.
+
+## Límites
+
+- **No** estamos obligados a seguirlo al 100 %. Nuestro código y convenciones mandan: `AGENTS.md`, `docs/insights.md`, este repo.
+- **No** reescribir el estimador solo para igualar nombres de carpetas o el stack Rails del curso.
+- **No** commitear cambios dentro de `lidr-ai-engineering` como parte del entregable del alumno (salvo que el usuario lo pida explícitamente).
