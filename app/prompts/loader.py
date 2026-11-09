@@ -32,6 +32,7 @@ class PromptFields(Protocol):
     project_type: object | None
     detail_level: object
     output_format: object
+    project_metadata: str
 
 
 class UnknownPromptVersionError(ValueError):
@@ -76,6 +77,7 @@ def _context(request: PromptFields, *, rates: str, examples: str, version: str) 
         "rates": rates,
         "examples": examples,
         "version": version,
+        "project_metadata": getattr(request, "project_metadata", "") or "",
     }
 
 
@@ -106,6 +108,13 @@ def render_estimation_prompt(
 def render_reminder(version: str = "v1") -> str:
     _require_version(version)
     return _env.get_template(f"estimation/{version}/reminder.j2").render().strip()
+
+
+def render_metadata_prompt(*, previous: str, turn: str, summary: str) -> tuple[str, str]:
+    """Prompt de la segunda llamada. No es una versión de estimación."""
+    system = _env.get_template("metadata/v1/system.j2").render().strip()
+    user = _env.get_template("metadata/v1/user.j2").render(previous=previous, turn=turn, summary=summary).strip()
+    return system, user
 
 
 def render_repair(version: str = "v1", *, error: str) -> str:

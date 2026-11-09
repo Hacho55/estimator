@@ -56,12 +56,14 @@ def _render_request(
     detail_level: DetailLevel = DEFAULT_DETAIL_LEVEL,
     output_format: OutputFormat = DEFAULT_OUTPUT_FORMAT,
     project_type=None,
+    project_metadata: str = "",
 ) -> PromptRenderRequest:
     return PromptRenderRequest(
         description=description,
         project_type=project_type,
         detail_level=detail_level,
         output_format=output_format,
+        project_metadata=project_metadata,
     )
 
 
@@ -83,12 +85,14 @@ def build_messages(
     detail_level: DetailLevel = DEFAULT_DETAIL_LEVEL,
     output_format: OutputFormat = DEFAULT_OUTPUT_FORMAT,
     project_type=None,
+    project_metadata: str = "",
 ) -> list[dict]:
     request = _render_request(
         transcription,
         detail_level=detail_level,
         output_format=output_format,
         project_type=project_type,
+        project_metadata=project_metadata,
     )
     system, user = render_estimation_prompt(
         request,

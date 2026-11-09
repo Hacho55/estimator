@@ -37,6 +37,7 @@ class PromptRenderRequest(BaseModel):
     project_type: ProjectType | None = None
     detail_level: DetailLevel = DetailLevel.MEDIUM
     output_format: OutputFormat = OutputFormat.PHASES_TABLE
+    project_metadata: str = ""
 
 
 class EstimationRequest(BaseModel):
