@@ -62,6 +62,10 @@ class Settings(BaseSettings):
     TRANSCRIPTION_MAX_CHARS: int = Field(40_000, gt=50)
 
     CONVERSATION_MAX_TURNS: int = Field(10, gt=0)
+    # Sesiones: ventana deslizante sin anclas. Un turno es un par user/assistant.
+    SESSION_MAX_TURNS: int = Field(6, gt=0)
+    ATTACHMENT_MAX_FILES: int = Field(5, gt=0)
+    ATTACHMENT_MAX_BYTES: int = Field(5_000_000, gt=0)
     CONVERSATION_TTL_MINUTES: int = Field(60, gt=0)
     CONVERSATION_MAX_ACTIVE: int = Field(1000, gt=0)
     CONVERSATION_NEAR_LIMIT_RATIO: float = Field(0.8, gt=0, le=1)

@@ -41,6 +41,24 @@ class ContextBudgetExceededError(ServiceError):
     code = "context_budget_exceeded"
 
 
+class SessionNotFoundError(ServiceError):
+    status_code = 404
+    code = "session_not_found"
+
+    def __init__(self, session_id: str) -> None:
+        super().__init__(f"No existe la sesión {session_id}. Crea una nueva con POST /sessions.")
+
+
+class AttachmentRejectedError(ServiceError):
+    status_code = 422
+    code = "attachment_rejected"
+
+
+class AttachmentTooLargeError(ServiceError):
+    status_code = 413
+    code = "attachment_too_large"
+
+
 class ConversationNotFoundError(ServiceError):
     status_code = 404
     code = "conversation_not_found"

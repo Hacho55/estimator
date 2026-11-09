@@ -74,6 +74,7 @@ from app.state.semantic_cache import (
     lookup_semantic,
     store_semantic,
 )
+from app.state.sessions import slide_history
 from app.tokens import CACHE_MIN_TOKENS, build_token_budget
 
 GATEWAY = "litellm"
@@ -128,6 +129,8 @@ class ContextOverrides:
     form_detail_level: object | None = None  # DetailLevel del formulario.
     output_format: object | None = None
     project_type: object | None = None
+    project_metadata: str = ""
+    session_window: bool = False  # Sesión: recorta por pares viejos, sin anclas.
 
 
 @dataclass
@@ -385,6 +388,7 @@ def _prepare(
                     detail_level=form_detail,  # type: ignore[arg-type]
                     output_format=output_format,  # type: ignore[arg-type]
                     project_type=overrides.project_type,
+                    project_metadata=overrides.project_metadata,
                 ),
                 provider,
                 block,
@@ -767,6 +771,7 @@ def _history_that_fits(transcription, block, history, overrides, model):
             detail_level=form_detail,  # type: ignore[arg-type]
             output_format=output_format,  # type: ignore[arg-type]
             project_type=overrides.project_type,
+            project_metadata=overrides.project_metadata,
         ),
         block,
         transcription,
@@ -779,6 +784,8 @@ def _history_that_fits(transcription, block, history, overrides, model):
         - settings.LLM_MAX_TOKENS
         - fixed.total_input
     )
+    if overrides.session_window:
+        return slide_history(history, room_tokens=max(room, 0))
     return select_history(history, max_turns=settings.CONVERSATION_MAX_TURNS, room_tokens=max(room, 0))
 
 
