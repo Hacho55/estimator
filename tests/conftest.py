@@ -23,6 +23,7 @@ from app.config import get_settings
 from app.main import app
 from app.services.llm_client import LLMResult
 from app.state.response_cache import clear_response_cache
+from app.state.sessions import reset_session_store
 from tests.llm_fakes import estimation_turn
 
 
@@ -30,6 +31,7 @@ from tests.llm_fakes import estimation_turn
 def _clear_settings_cache(monkeypatch, request):
     get_settings.cache_clear()
     clear_response_cache()
+    reset_session_store()
     # Evita cargar spaCy en el job principal: la vía regex basta para los tests.
     if "presidio" not in request.keywords:
         import app.services.guardrails as guardrails
@@ -39,6 +41,7 @@ def _clear_settings_cache(monkeypatch, request):
     yield
     get_settings.cache_clear()
     clear_response_cache()
+    reset_session_store()
 
 
 @pytest.fixture
