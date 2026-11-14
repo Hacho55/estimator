@@ -113,6 +113,10 @@ Cada cambio en `.env` exige reiniciar uvicorn. La configuración se lee una vez 
 | `ATTACHMENT_MAX_FILES` | no | `5` | entero mayor que 0 | Adjuntos por petición en `/sessions/{id}/estimate` |
 | `ATTACHMENT_MAX_BYTES` | no | `5000000` | entero mayor que 0 | Tamaño máximo de cada adjunto |
 | `ATTACHMENT_MAX_EXPANDED_BYTES` | no | `50000000` | entero mayor que 0 | Tamaño descomprimido máximo de un DOCX. El cuerpo multipart entero se corta en `ATTACHMENT_MAX_FILES × ATTACHMENT_MAX_BYTES` más el texto |
+| `METADATA_MODEL` | no | vacío (`LLM_MODEL`) | id de LiteLLM | Modelo del extractor de memoria de `/sessions` |
+| `AUTH_MODE` | no | `off` | `jwt`, `off` | Cómo llega el tier: JWT del backend de negocio o `DEFAULT_TIER` fijo. Nunca del cuerpo |
+| `DEFAULT_TIER` | no | `developer` | `developer`, `pm`, `executive` | Tier con `AUTH_MODE=off` |
+| `AI_SERVICE_SECRET` | con `jwt` | vacío | ≥ 32 caracteres | Secreto HS256 compartido con `business_backend` |
 | `CONVERSATION_TTL_MINUTES` | no | `60` | entero mayor que 0 | Vida de una conversación en memoria |
 | `CONVERSATION_MAX_ACTIVE` | no | `1000` | entero mayor que 0 | Conversaciones simultáneas. Al pasarse, se elimina la más antigua |
 | `CONVERSATION_NEAR_LIMIT_RATIO` | no | `0.8` | entre 0 y 1 | A partir de qué fracción de la ventana `near_limit` pasa a `true` |
@@ -186,9 +190,33 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/conversations/EL_ID/messages \
 
 ## Sesiones
 
-`POST /sessions` devuelve un `session_id` (UUID v4). `POST /sessions/{session_id}/estimate` acepta `multipart/form-data`: `transcript`, `project_type`, `detail_level`, `output_format` y `attachments` (PDF o Word, opcionales). La respuesta trae la estimación validada y `project_metadata`.
+`POST /sessions` devuelve un `session_id` (UUID v4). `POST /sessions/{session_id}/estimate` acepta `multipart/form-data`: `transcript`, `project_type`, `detail_level` y `attachments` (PDF o Word, opcionales). La respuesta trae `tier`, la vista de ese perfil en `estimation_structured`, su markdown en `estimation`, `project_metadata` y `memory_changes`.
 
-La sesión vive en memoria del proceso, sin base de datos y sin Redis. Se pierde al reiniciar, caduca con `CONVERSATION_TTL_MINUTES` y no pasa de `CONVERSATION_MAX_ACTIVE`. Hace falta un solo worker. El historial guarda solo pares user/assistant (`SESSION_MAX_TURNS`, por defecto 6). El system prompt no cuenta como turno: se regenera en cada llamada con el bloque `<project_metadata>` de la plantilla `v3`. `/api/v1` y `/api/v2` siguen con su ventana de anclas y no usan este almacén.
+### Perfil (tier)
+
+La estructura de la respuesta depende del perfil del llamante, no de un campo del formulario:
+
+| Tier | Vista (`estimation_structured`) |
+|---|---|
+| `developer` | `components` (horas, coste, trabajo, riesgos técnicos y supuestos de stack), `uncertainty_drivers`, `total_hours_range` |
+| `pm` | `phases`, `milestones` con `cumulative_cost_eur`, `team_composition`, `duration_weeks_range`, `blockers` |
+| `executive` | `headline_cost_range`, `headline_duration_range`, `confidence_level` y su motivo, `top_three_risks`, `go_no_go_recommendation` |
+
+El modelo devuelve un desglose común (rol y horas) y lo propio del perfil; tarifas, costes, totales y rangos los calcula el código (`app/services/tier_views.py`). Cada tier tiene su plantilla `app/prompts/estimation/v4/system_<tier>.j2`, montada con parciales, y su `prompt_version` (`v4-<tier>-<hash>`).
+
+El tier llega firmado. Con `AUTH_MODE=jwt`, las dos rutas exigen `Authorization: Bearer <token>`: un JWT HS256 firmado con `AI_SERVICE_SECRET`, con `sub`, `tier`, `aud=estimador` y `exp`. La sesión pertenece al `sub` que la creó; otro usuario recibe 404. Con `AUTH_MODE=off` (por defecto, para desarrollo y tests) el tier es `DEFAULT_TIER`. En ningún modo se lee del cuerpo.
+
+```bash
+curl -s -X POST localhost:8000/sessions -H "Authorization: Bearer $TOKEN"
+```
+
+```bash
+curl -s -X POST "localhost:8000/sessions/$SESSION_ID/estimate" -H "Authorization: Bearer $TOKEN" -F transcript="$(cat data/transcripcion_reunion.md)" -F project_type=web_saas -F detail_level=medium
+```
+
+### Almacén y ventana
+
+La sesión vive en memoria del proceso, sin base de datos y sin Redis. Se pierde al reiniciar, caduca con `CONVERSATION_TTL_MINUTES` y no pasa de `CONVERSATION_MAX_ACTIVE`. Hace falta un solo worker. El historial guarda solo pares user/assistant (`SESSION_MAX_TURNS`, por defecto 6) y no conserva anclas: los hechos que importan viven en la memoria (`project_metadata`), que no se recorta. El system prompt no cuenta como turno: se regenera en cada llamada. `/api/v1` y `/api/v2` siguen con su ventana de anclas y no usan este almacén.
 
 Los tests, incluidos los de sesión, corren con:
 
@@ -202,9 +230,11 @@ El texto se extrae en el proceso con `pypdf` (PDF) y `python-docx` (Word) y se c
 
 Se probó el otro camino contra el proxy: un PDF mínimo como bloque `type: file` con `file_data` en base64, por `chat.completions`. El modelo del entorno (`openrouter/anthropic/claude-sonnet-5.5`) y el de reserva (`openrouter/anthropic/claude-haiku-4.5`) devolvieron el código impreso en el PDF. No basta como camino único: un `.docx` no viaja en ese bloque, y el ejercicio pide un solo camino para PDF y Word.
 
-### project_metadata
+### project_metadata (memoria)
 
-Tras cada estimación hay una segunda llamada, con el prompt `app/prompts/metadata/v1/`. Recibe los hechos anteriores, el turno ya tachado y un resumen de la estimación, y devuelve `project_name`, `assumed_team_size`, `mentioned_technologies` y `agreed_scope`. Si esa llamada falla, se conserva el metadata anterior y la estimación se devuelve igual. Esos hechos se inyectan en `<project_metadata>` del system prompt `v3` en el turno siguiente. En el primero el bloque va vacío. «Ver prompt base» en el front muestra la plantilla `v3` del formulario, sin el historial ni los adjuntos de la sesión. Los tokens, el coste y la latencia de la respuesta suman la estimación y esta segunda llamada.
+Tras cada turno, una llamada corta (`app/prompts/metadata/v2/`, modelo `METADATA_MODEL`) propone un **delta**: qué fijar (`set_*`), qué añadir y qué retirar, con la frase del turno que lo justifica. `app/state/memory.py` lo valida (longitudes, rangos, contradicciones) y lo fusiona sin LLM. Retirar una tecnología la pasa a `rejected_options`. Cada cambio queda en `memory_changes` de la respuesta, con el turno y la evidencia. Si la llamada falla, la memoria no cambia y su latencia se suma igual.
+
+La memoria entra al final del system de `v4`, campo a campo y solo con lo que tiene valor, como hechos establecidos que son datos y no instrucciones. Va en un segmento propio, después del punto de caché y fuera del hash de `prompt_version`: cambia en cada turno sin romper la caché ni la versión. Los tokens, el coste y la latencia de la respuesta suman la estimación y la extracción.
 
 El contrato v1 admite campos nuevos opcionales. Renombrar, quitar o cambiar el tipo de un campo exige `/api/v2` con su propio router, mientras v1 sigue respondiendo. Los `operation_id` no se renombran.
 

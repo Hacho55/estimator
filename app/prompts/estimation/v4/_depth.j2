@@ -1,0 +1,8 @@
+{% if detail_level == "summary" %}
+Profundidad pedida: resumen. Pocas unidades de trabajo por grupo y supuestos generales.
+{% elif detail_level == "detailed" %}
+Profundidad pedida: detallada. Desglosa cada grupo en unidades de trabajo concretas y declara
+al menos tres riesgos.
+{% else %}
+Profundidad pedida: media. Las unidades de trabajo principales de cada grupo.
+{% endif %}

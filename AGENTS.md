@@ -18,6 +18,7 @@ Material de enseñanza en `/Users/horaciosuarez/DEVS/AI-Eng/lidr-ai-engineering`
 - Orquestación: `app/services/llm_service.py` (`generate_estimation`). No conoce HTTP.
 - Memoria de la sesión (hechos del proyecto): el extractor propone un delta en `app/services/metadata_extractor.py` y `app/state/memory.py` lo valida y fusiona, sin LLM. Las sesiones usan una ventana deslizante sin anclas porque los hechos que importan viven en la memoria, que no se recorta.
 - Historial de conversación y caché exacta: `app/state/` en memoria del proceso. Caché semántica: `app/state/semantic_cache.py` (Redis si hay `REDIS_URL`; si no, memoria). Nunca dentro de `services/`.
+- Perfiles (tiers): configuración en `app/tiers.py` (plantilla, schemas, herramientas y revisión por tier); schemas en `app/schemas/tiers.py` (borrador del modelo y vista del cliente); del borrador a la vista, sin LLM, en `app/services/tier_views.py`; plantillas `system_<tier>.j2` con parciales en la carpeta de versión. El tier llega por `app/security/caller.py` (JWT del backend de negocio o `AUTH_MODE=off`), nunca del cuerpo de la petición.
 - Pydantic va en `app/schemas/`. `app/models/` queda reservado para el ORM de más adelante.
 
 ## Contexto

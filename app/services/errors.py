@@ -41,6 +41,11 @@ class ContextBudgetExceededError(ServiceError):
     code = "context_budget_exceeded"
 
 
+class AuthenticationError(ServiceError):
+    status_code = 401
+    code = "unauthorized"
+
+
 class SessionNotFoundError(ServiceError):
     status_code = 404
     code = "session_not_found"

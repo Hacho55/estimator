@@ -38,7 +38,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?$",
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
-    allow_headers=["content-type"],
+    allow_headers=["content-type", "authorization"],
 )
 app.include_router(estimations.router)
 app.include_router(estimations_v2.router)

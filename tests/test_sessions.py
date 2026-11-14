@@ -15,7 +15,7 @@ from app.services.errors import SessionNotFoundError
 from app.services.llm_client import LLMResult
 from app.services.llm_service import ContextOverrides, _history_that_fits
 from app.state.sessions import ConversationHistory, InMemorySessionStore
-from tests.llm_fakes import estimation_turn
+from tests.llm_fakes import tier_turn
 
 FORM = {
     "project_type": "web_saas",
@@ -100,7 +100,7 @@ def test_two_turns_update_project_metadata(client, monkeypatch) -> None:
                 "set_agreed_scope": scope,
             }
             return _result(json.dumps(payload))
-        return _result(estimation_turn())
+        return _result(tier_turn("developer"))
 
     _install(monkeypatch, complete)
     created = client.post("/sessions")
@@ -132,7 +132,7 @@ def test_pdf_attachment_changes_project_title(client, monkeypatch) -> None:
             return _result("{}")
         blob = "\n".join(_message_text(message) for message in messages)
         title = token if token in blob else "Sin adjunto"
-        return _result(estimation_turn(project_title=title))
+        return _result(tier_turn("developer", project_title=title))
 
     _install(monkeypatch, complete)
     created = client.post("/sessions")
@@ -156,7 +156,7 @@ def test_eight_turns_never_exceed_session_window(client, monkeypatch) -> None:
     async def complete(messages, response_format, *, name, metadata=None, model=None, estimated_input_tokens=None):
         if name == "generate-estimate":
             estimate_calls.append(messages)
-            return _result(estimation_turn())
+            return _result(tier_turn("developer"))
         return _result(json.dumps({"set_project_name": "Ventana"}))
 
     _install(monkeypatch, complete)
@@ -240,7 +240,7 @@ def test_empty_metadata_json_keeps_previous_facts(client, monkeypatch) -> None:
     async def complete(messages, response_format, *, name, metadata=None, model=None, estimated_input_tokens=None):
         if name == "extract-metadata":
             return _result(next(replies))
-        return _result(estimation_turn())
+        return _result(tier_turn("developer"))
 
     _install(monkeypatch, complete)
     session_id = client.post("/sessions").json()["session_id"]
@@ -260,7 +260,7 @@ def test_answer_is_valid_after_the_window_drops_every_pair(client, monkeypatch) 
             return _result(_metadata_json(set_team_size=4))
         turns.append(name)
         if len(turns) == 1:
-            return _result(estimation_turn())
+            return _result(tier_turn("developer"))
         assert not any(message["role"] == "assistant" for message in messages), "el recorte debía vaciar el historial"
         return _result(json.dumps({"kind": "answer", "message": "Son cuatro personas.", "estimation": None}))
 
@@ -348,7 +348,7 @@ def test_fact_from_turn_one_survives_after_the_window_drops_it(client, monkeypat
                 return _result(_metadata_json(set_project_name="BookFlow", evidence="se llama BookFlow"))
             return _result("{}")
         systems.append(_message_text(messages[0]))
-        return _result(estimation_turn())
+        return _result(tier_turn("developer"))
 
     _install(monkeypatch, complete)
     session_id = client.post("/sessions").json()["session_id"]
@@ -376,7 +376,7 @@ def test_user_revision_moves_technology_to_rejected_options(client, monkeypatch)
     async def complete(messages, response_format, *, name, metadata=None, model=None, estimated_input_tokens=None):
         if name == "extract-metadata":
             return _result(next(replies))
-        return _result(estimation_turn())
+        return _result(tier_turn("developer"))
 
     _install(monkeypatch, complete)
     session_id = client.post("/sessions").json()["session_id"]
@@ -400,7 +400,7 @@ def test_failed_extraction_keeps_memory_and_counts_its_latency(client, monkeypat
         if name == "extract-metadata":
             await asyncio.sleep(0.05)
             raise RuntimeError("timeout del extractor")
-        return _result(estimation_turn())
+        return _result(tier_turn("developer"))
 
     _install(monkeypatch, complete)
     session_id = client.post("/sessions").json()["session_id"]
@@ -419,7 +419,7 @@ def test_metadata_extractor_uses_its_own_model(client, monkeypatch) -> None:
         models[name] = model
         if name == "extract-metadata":
             return _result("{}")
-        return _result(estimation_turn())
+        return _result(tier_turn("developer"))
 
     _install(monkeypatch, complete)
     session_id = client.post("/sessions").json()["session_id"]
@@ -434,7 +434,7 @@ def test_audit_turn_keeps_counting_past_the_window(client, monkeypatch) -> None:
         if name == "extract-metadata":
             calls["n"] += 1
             return _result(_metadata_json(add_constraints=[f"restricción {calls['n']}"]))
-        return _result(estimation_turn())
+        return _result(tier_turn("developer"))
 
     _install(monkeypatch, complete)
     session_id = client.post("/sessions").json()["session_id"]

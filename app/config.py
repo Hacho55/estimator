@@ -5,7 +5,7 @@ from functools import lru_cache
 from typing import Literal
 
 from dotenv import load_dotenv
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Langfuse lee LANGFUSE_* de os.environ. pydantic-settings no las exporta.
@@ -66,6 +66,10 @@ class Settings(BaseSettings):
     SESSION_MAX_TURNS: int = Field(6, gt=0)
     # Extractor de memoria: modelo barato. Vacío = LLM_MODEL.
     METADATA_MODEL: str = ""
+    # Tiers: el perfil llega en un JWT del backend de negocio (jwt) o es fijo (off).
+    AUTH_MODE: Literal["jwt", "off"] = "off"
+    DEFAULT_TIER: Literal["developer", "pm", "executive"] = "developer"
+    AI_SERVICE_SECRET: SecretStr = SecretStr("")
     ATTACHMENT_MAX_FILES: int = Field(5, gt=0)
     ATTACHMENT_MAX_BYTES: int = Field(5_000_000, gt=0)
     # Tamaño descomprimido máximo de un DOCX (es un zip).
@@ -83,6 +87,13 @@ class Settings(BaseSettings):
     @classmethod
     def strip_base_url(cls, value: str) -> str:
         return value.rstrip("/")
+
+    @model_validator(mode="after")
+    def jwt_needs_a_secret(self) -> "Settings":
+        # HS256 con un secreto corto se rompe por fuerza bruta: se exige al arrancar.
+        if self.AUTH_MODE == "jwt" and len(self.AI_SERVICE_SECRET.get_secret_value()) < 32:
+            raise ValueError("AUTH_MODE=jwt exige AI_SERVICE_SECRET de al menos 32 caracteres.")
+        return self
 
     @property
     def langfuse_enabled(self) -> bool:

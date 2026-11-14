@@ -118,17 +118,25 @@ def render_estimation_prompt(
     *,
     rates: str,
     examples: str,
+    system_template: str = "system.j2",
 ) -> tuple[str, str]:
-    """Devuelve ``(system, user)`` listos para enviar al modelo."""
+    """Devuelve ``(system, user)`` listos para enviar al modelo.
+
+    ``system_template`` elige el system de un tier (``system_pm.j2``) dentro de la versión.
+    """
     _require_version(version)
     context = _context(request, rates=rates, examples=examples, version=version)
     try:
-        system = _env.get_template(f"estimation/{version}/system.j2").render(**context)
+        system = _env.get_template(f"estimation/{version}/{system_template}").render(**context)
         user = _env.get_template(f"estimation/{version}/user.j2").render(**context)
     except TemplateNotFound as exc:
         raise UnknownPromptVersionError(f"Falta una plantilla en la versión '{version}'.") from exc
     _log_render(version, system, user)
     return system, user
+
+
+def has_template(version: str, name: str) -> bool:
+    return (_BASE_DIR / "estimation" / version / name).is_file()
 
 
 def has_turn_template(version: str) -> bool:

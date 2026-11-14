@@ -67,6 +67,15 @@ from app.services.prompt_builder import (
     repair_instruction,
     system_text_of,
 )
+from app.services.tier_views import (
+    build_view,
+    corrected_draft,
+    parse_tier_turn,
+    redact_model,
+    render_view_markdown,
+    to_estimation_draft,
+)
+from app.services.tier_views import history_content as tier_history_content
 from app.state.conversations import select_history
 from app.state.response_cache import CachedCompletion, cache_key, lookup, store
 from app.state.semantic_cache import (
@@ -76,6 +85,7 @@ from app.state.semantic_cache import (
     store_semantic,
 )
 from app.state.sessions import slide_history
+from app.tiers import TierConfig, resolve_tier_config
 from app.tokens import CACHE_MIN_TOKENS, build_token_budget
 
 GATEWAY = "litellm"
@@ -133,6 +143,7 @@ class ContextOverrides:
     project_metadata: str = ""  # Bloque JSON de v3.
     dynamic: DynamicContext | None = None  # Memoria, adjuntos, herramientas y crítico (v4).
     session_window: bool = False  # Sesión: recorta por pares viejos, sin anclas.
+    tier: str | None = None  # Perfil del llamante (app/tiers.py). None: contrato clásico de v1/v2.
 
 
 @dataclass
@@ -159,6 +170,8 @@ class TurnResult:
     dropped_turns: int = 0
     repairs: int = 0
     scrubbed_input: str = ""
+    tier: str | None = None
+    view: object | None = None  # Vista del tier para el cliente (app/schemas/tiers.py).
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     def to_estimation_response(self) -> EstimationResponse:
@@ -308,6 +321,20 @@ class _Prepared:
     has_prior_turns: bool = False
     # Hay contexto dinámico (memoria, adjuntos, herramientas): la caché semántica no aplica.
     has_dynamic_context: bool = False
+    tier: str | None = None
+
+
+def _redact_text(text: str) -> str:
+    return redact_pii(text)[0]
+
+
+def _tier_config(overrides: ContextOverrides) -> TierConfig | None:
+    return resolve_tier_config(overrides.tier) if overrides.tier else None
+
+
+def _system_template(overrides: ContextOverrides) -> str:
+    config = _tier_config(overrides)
+    return config.template if config else "system.j2"
 
 
 def _dynamic_payload(dynamic: DynamicContext | None, legacy_metadata: str = "") -> dict | None:
@@ -411,7 +438,8 @@ def _prepare(
                     output_format=output_format,  # type: ignore[arg-type]
                     project_type=overrides.project_type,
                     project_metadata=overrides.project_metadata,
-            dynamic=overrides.dynamic,
+                    dynamic=overrides.dynamic,
+                    system_template=_system_template(overrides),
                 ),
                 provider,
                 block,
@@ -425,9 +453,12 @@ def _prepare(
                 "La petición no cabe en la ventana de contexto con el margen de seguridad. "
                 f"Entrada aproximada: {budget.total_input} tokens; ventana: {budget.window}."
             )
+        tier_config = _tier_config(overrides)
+        # Con tier, la versión dice también qué plantilla de perfil se usó (v4-pm-<hash>).
+        version_label = f"{prompt_label}-{tier_config.tier.value}" if tier_config else prompt_label
         version = prompt_version(
             system_text_of(messages) if block.examples_are_static else cacheable_text(messages, block),
-            prompt_label,
+            version_label,
         )
         _annotate(prompt_span, output={"prompt_version": version, "messages": len(messages)})
 
@@ -451,7 +482,12 @@ def _prepare(
         messages=messages,
         budget=budget,
         version=version,
-        response_format=build_response_format(),
+        response_format=(
+            build_response_format(tier_config.turn_schema, f"{tier_config.tier.value}_turn")
+            if tier_config
+            else build_response_format()
+        ),
+        tier=tier_config.tier.value if tier_config else None,
         metadata={"prompt_version": version, "examples": ",".join(block.included_ids)},
         key=key,
         cached=cached,
@@ -653,8 +689,9 @@ async def _assemble(first: llm_client.LLMResult, prepared: _Prepared, *, transcr
     usage = _usage_from(first)
     cost = first.cost_usd
     latency = first.latency_ms
+    parse = (lambda content: parse_tier_turn(content, prepared.tier)) if prepared.tier else parse_turn
     try:
-        turn = parse_turn(first.content)
+        turn = parse(first.content)
         _require_kind(turn, prepared.has_prior_turns)
     except InvalidLLMOutputError as exc:
         repairs = 1
@@ -673,7 +710,7 @@ async def _assemble(first: llm_client.LLMResult, prepared: _Prepared, *, transcr
             model=model,
         )
         _require_complete(second)
-        turn = parse_turn(second.content)
+        turn = parse(second.content)
         _require_kind(turn, prepared.has_prior_turns)
         usage = _add_usage(usage, second)
         latency += second.latency_ms
@@ -687,21 +724,33 @@ async def _assemble(first: llm_client.LLMResult, prepared: _Prepared, *, transcr
             turn = turn.model_copy(update={"message": scrubbed_message})
 
     estimation = None
+    view = None
     warnings: list[ValidationIssue] = []
     markdown = None
     if turn.kind in {"estimation", "estimation_update"}:
         # Observabilidad: el span anota los avisos. validate_and_fix es el trabajo del estimador.
         with traced_span("postprocess") as post_span:
+            # Con tier, el desglose común del borrador pasa por el mismo motor de siempre.
+            draft = to_estimation_draft(turn.estimation) if prepared.tier else turn.estimation
             estimation, warnings = validate_and_fix(
-                turn.estimation,  # type: ignore[arg-type]
-                require_phase_assumptions=prepared.form_detail_level == DetailLevel.DETAILED,
+                draft,  # type: ignore[arg-type]
+                require_phase_assumptions=(not prepared.tier) and prepared.form_detail_level == DetailLevel.DETAILED,
             )
             estimation, guard_warnings = guard_output(estimation)
             warnings = [*warnings, *guard_warnings]
-            markdown = render_markdown(estimation)
+            if prepared.tier:
+                # El borrador corregido y tachado es la única fuente: vista, historial y cachés.
+                safe_draft = redact_model(corrected_draft(turn.estimation, estimation), _redact_text)  # type: ignore[arg-type]
+                view = redact_model(build_view(prepared.tier, safe_draft, estimation), _redact_text)
+                markdown = render_view_markdown(view)
+            else:
+                markdown = render_markdown(estimation)
             _annotate(post_span, output={"warnings": [issue.code for issue in warnings]})
 
-    history_content = to_history_content(turn, estimation)
+    if prepared.tier:
+        history_content = tier_history_content(turn, safe_draft if estimation is not None else None)
+    else:
+        history_content = to_history_content(turn, estimation)
 
     # Exacta y semántica solo tras validar y pasar guardrails; solo si es estimable.
     # Se guarda el turno ya postprocesado (mismo JSON que el historial), no el bruto del modelo.
@@ -746,6 +795,8 @@ async def _assemble(first: llm_client.LLMResult, prepared: _Prepared, *, transcr
         dropped_turns=dropped,
         repairs=repairs,
         scrubbed_input=transcription,
+        tier=prepared.tier,
+        view=view,
     )
     # Observabilidad: la estimación ya está en result. Esto solo puntúa y registra.
     scores = collect_metrics(
@@ -798,6 +849,7 @@ def _history_that_fits(transcription, block, history, overrides, model):
             project_type=overrides.project_type,
             project_metadata=overrides.project_metadata,
             dynamic=overrides.dynamic,
+            system_template=_system_template(overrides),
         ),
         block,
         transcription,

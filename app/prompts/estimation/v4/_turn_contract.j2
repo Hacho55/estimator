@@ -1,0 +1,15 @@
+Responde solo con un objeto JSON, sin markdown y sin texto alrededor, con:
+- kind: "estimation" en la primera estimación, "estimation_update" si ajustas una estimación
+  ya dada, o "answer" si la petición es una pregunta y no un cambio de la estimación.
+- message: con "answer", la respuesta en texto; con "estimation_update", qué cambió; con
+  "estimation", una frase de cierre.
+- estimation: obligatoria salvo con "answer", con los campos que se describen a continuación.
+Campos comunes de estimation:
+- project_title, summary (2 o 3 frases).
+- is_estimable; si es false, not_estimable_reason, work vacío y team vacío. Márcalo false solo
+  cuando el texto no describe un proyecto de software.
+- work: lista de unidades de trabajo con name, group, role (clave de la tabla de tarifas) y
+  hours (múltiplos de 5). No pongas tarifas, costes ni totales: los calcula el sistema.
+- team: role, count y dedication (de 0 a 1). duration_weeks_min y duration_weeks_max.
+- assumptions y risks, cada uno con al menos un elemento si el proyecto es estimable.
+No inventes datos del cliente: si falta información, declárala como supuesto.

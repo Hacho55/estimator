@@ -5,13 +5,14 @@ from __future__ import annotations
 import asyncio
 
 import structlog
-from fastapi import APIRouter, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, UploadFile
 
 from app.attachments.extractor import attachment_label, extract_text, join_attachments, read_up_to
 from app.config import get_settings
 from app.observability import traced_span
-from app.schemas.estimation import DetailLevel, ErrorResponse, OutputFormat, ProjectType, UsageInfo
+from app.schemas.estimation import DetailLevel, ErrorResponse, ProjectType, UsageInfo
 from app.schemas.session import MemoryChange, ProjectMetadata, SessionCreated, SessionEstimateResponse
+from app.security.caller import CallerContext, get_caller
 from app.services.errors import AttachmentRejectedError, AttachmentTooLargeError, InputRejectedError
 from app.services.llm_service import ContextOverrides, generate_estimation
 from app.services.metadata_extractor import extract_metadata_update
@@ -27,6 +28,7 @@ SESSION_PROMPT_VERSION = "v4"
 MEMORY_LOG_MAX = 200  # Registro de auditoría acotado por sesión.
 
 _ERRORS = {
+    401: {"model": ErrorResponse},
     404: {"model": ErrorResponse},
     413: {"model": ErrorResponse},
     422: {"model": ErrorResponse},
@@ -35,9 +37,15 @@ _ERRORS = {
 }
 
 
-@router.post("", operation_id="create_session", response_model=SessionCreated)
-async def create_session() -> SessionCreated:
-    session = get_session_store().create()
+@router.post(
+    "",
+    operation_id="create_session",
+    response_model=SessionCreated,
+    responses={401: {"model": ErrorResponse}},
+)
+async def create_session(caller: CallerContext = Depends(get_caller)) -> SessionCreated:
+    """Crea una sesión del llamante. Con JWT, solo su ``sub`` podrá usarla."""
+    session = get_session_store().create(owner=caller.user_id)
     return SessionCreated(session_id=session.id)
 
 
@@ -52,16 +60,17 @@ async def estimate_session(
     transcript: str = Form(),
     project_type: str | None = Form(default=None),
     detail_level: str | None = Form(default=None),
-    output_format: str | None = Form(default=None),
     attachments: list[UploadFile] | None = File(default=None),
+    caller: CallerContext = Depends(get_caller),
 ) -> SessionEstimateResponse:
+    """Un turno de sesión. El perfil (tier) sale del token del llamante, nunca del formulario."""
     store = get_session_store()
-    session = store.get(session_id)
+    session = store.get(session_id, owner=caller.user_id)
     async with session.lock:
         text = _bounded_transcript(transcript, first_turn=session.history.turn_count() == 0)
         extracted = await _read_attachments(attachments or [])
         combined = join_attachments(text, extracted)
-        _remember_form(session, project_type, detail_level, output_format)
+        _remember_form(session, project_type, detail_level)
         history = list(session.history.messages)
         memory = None if session.metadata.is_empty() else session.metadata.model_dump()
         result = await generate_estimation(
@@ -70,10 +79,10 @@ async def estimate_session(
             overrides=ContextOverrides(
                 prompt_version=SESSION_PROMPT_VERSION,
                 form_detail_level=session.form_detail_level,
-                output_format=session.output_format,
                 project_type=session.project_type,
                 dynamic=DynamicContext(memory=memory),
                 session_window=True,
+                tier=caller.tier.value,
             ),
             session_id=session.id,
         )
@@ -89,12 +98,14 @@ async def estimate_session(
         if merged.discarded:
             log.info("memory_update_discarded", session_id=session.id, reasons=merged.discarded)
         session.metadata = merged.metadata
-        session.memory_log.extend(merged.changes)
+        changes = [*_tier_change(session.last_tier, caller.tier.value, turn_number), *merged.changes]
+        session.last_tier = caller.tier.value
+        session.memory_log.extend(changes)
         del session.memory_log[:-MEMORY_LOG_MAX]
         session.history.append(user_turn, result.history_content, result.kind)
         session.turns = turn_number
         store.touch(session)
-        return _response(session.id, session.metadata, merged.changes, extraction, result)
+        return _response(session.id, session.metadata, changes, extraction, result)
 
 
 def _bounded_transcript(transcript: str, *, first_turn: bool) -> str:
@@ -112,7 +123,8 @@ def _bounded_transcript(transcript: str, *, first_turn: bool) -> str:
     return text
 
 
-def _remember_form(session, project_type: str | None, detail_level: str | None, output_format: str | None) -> None:
+def _remember_form(session, project_type: str | None, detail_level: str | None) -> None:
+    """El formulario de la sesión: tipo de proyecto y profundidad. La estructura la fija el tier (D7)."""
     if project_type:
         session.project_type = _choice(ProjectType, project_type)
     elif session.project_type is None:
@@ -121,10 +133,13 @@ def _remember_form(session, project_type: str | None, detail_level: str | None, 
         session.form_detail_level = _choice(DetailLevel, detail_level)
     elif session.form_detail_level is None:
         session.form_detail_level = DetailLevel.MEDIUM
-    if output_format:
-        session.output_format = _choice(OutputFormat, output_format)
-    elif session.output_format is None:
-        session.output_format = OutputFormat.PHASES_TABLE
+
+
+def _tier_change(previous: str | None, current: str, turn: int) -> list[MemoryChange]:
+    """El cambio de perfil entre turnos queda en la auditoría de la sesión."""
+    if previous is None or previous == current:
+        return []
+    return [MemoryChange(turn=turn, field="tier", before=previous, after=current)]
 
 
 def _choice(enum_cls, value: str):
@@ -170,7 +185,7 @@ def _response(
     extraction,
     result,
 ) -> SessionEstimateResponse:
-    estimation = None if result.kind == "answer" else result.estimation
+    view = None if result.kind == "answer" else result.view
     usage = _plus_usage(result.usage, extraction.usage)
     cost = _plus_cost(result.cost_usd, extraction.cost_usd)
     return SessionEstimateResponse(
@@ -180,7 +195,8 @@ def _response(
         kind=result.kind,
         message=result.message,
         estimation=result.estimation_markdown,
-        estimation_structured=estimation,
+        tier=result.tier,
+        estimation_structured=view,
         warnings=result.warnings,
         model=result.model,
         provider=result.provider,

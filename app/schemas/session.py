@@ -4,7 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.schemas.estimation import Estimation, UsageInfo, ValidationIssue
+from app.schemas.estimation import UsageInfo, ValidationIssue
+from app.schemas.tiers import TierEstimate
 
 # Límites de la memoria. Un valor fuera de ellos es una extracción sospechosa.
 MAX_NAME_CHARS = 120
@@ -98,8 +99,9 @@ class SessionEstimateResponse(BaseModel):
     memory_changes: list[MemoryChange] = Field(default_factory=list)
     kind: Literal["estimation", "estimation_update", "answer"]
     message: str | None = None
-    estimation: str | None = None
-    estimation_structured: Estimation | None = None
+    tier: Literal["developer", "pm", "executive"] | None = None
+    estimation: str | None = None  # Markdown de la vista del tier.
+    estimation_structured: TierEstimate | None = None
     warnings: list[ValidationIssue]
     model: str
     provider: str

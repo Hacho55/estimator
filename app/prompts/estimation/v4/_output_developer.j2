@@ -1,0 +1,10 @@
+<output_format>
+{% include "estimation/" ~ version ~ "/_turn_contract.j2" %}
+Campos propios de este perfil (developer):
+- En work, group es el componente técnico al que pertenece cada unidad de trabajo.
+- components: una entrada por componente usado en work, con name (igual que group),
+  technical_risks y stack_assumptions (supuestos sobre el stack).
+- uncertainty_drivers: partes del alcance donde una decisión pequeña cambia la estimación
+  más de un 20 %.
+{% include "estimation/" ~ version ~ "/_depth.j2" %}
+</output_format>

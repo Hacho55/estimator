@@ -67,3 +67,56 @@ def estimation_turn(kind: str = "estimation", message: str | None = None, **over
             "estimation": estimation_payload(**overrides),
         }
     return json.dumps(payload, ensure_ascii=False)
+
+
+# --- Tiers (sesión 5): borradores con desglose común y campos propios ---------
+
+_WORK = [
+    {"name": "Maquetación", "group": "Frontend", "role": "frontend", "hours": 42},
+    {"name": "Integración HubSpot", "group": "Backend", "role": "backend", "hours": 30},
+    {"name": "Blog", "group": "Frontend", "role": "frontend", "hours": 20},
+    {"name": "Pruebas", "group": "QA", "role": "qa", "hours": 10},
+]
+
+
+def tier_draft(tier: str, **overrides) -> dict:
+    data = {
+        "project_title": "Landing con HubSpot",
+        "summary": "Landing con formulario, integración con HubSpot y un blog.",
+        "is_estimable": True,
+        "not_estimable_reason": None,
+        "work": [dict(item) for item in _WORK],
+        "team": [{"role": "frontend", "count": 1, "dedication": 1}, {"role": "backend", "count": 1, "dedication": 0.5}],
+        "duration_weeks_min": 3,
+        "duration_weeks_max": 5,
+        "assumptions": ["El diseño de Figma está cerrado."],
+        "risks": ["La API de HubSpot puede cambiar."],
+    }
+    if tier == "developer":
+        data["components"] = [
+            {"name": "Frontend", "technical_risks": ["SSR del blog"], "stack_assumptions": ["Next.js"]},
+            {"name": "Backend", "technical_risks": ["Límites de la API"], "stack_assumptions": []},
+        ]
+        data["uncertainty_drivers"] = ["Volumen del blog", "Plan de HubSpot"]
+    elif tier == "pm":
+        for item in data["work"]:
+            item["group"] = {"Frontend": "Desarrollo", "Backend": "Desarrollo", "QA": "QA"}[item["group"]]
+        data["milestones"] = [
+            {"name": "Landing publicada", "phase": "Desarrollo", "deliverable": "Landing y blog en producción"},
+            {"name": "Aceptación", "phase": "QA", "deliverable": "Informe de pruebas"},
+        ]
+        data["blockers"] = ["Acceso a la cuenta de HubSpot"]
+    elif tier == "executive":
+        data["confidence_level"] = "medium"
+        data["confidence_reason"] = "El alcance está claro y el diseño cerrado."
+        data["top_three_risks"] = ["Cambios en HubSpot", "Contenido del blog tarde", "Aprobaciones del cliente"]
+        data["go_no_go_recommendation"] = "Seguir: riesgo bajo y retorno rápido."
+    data.update(overrides)
+    return data
+
+
+def tier_turn(tier: str, kind: str = "estimation", message: str | None = None, **overrides) -> str:
+    if kind == "answer":
+        return json.dumps({"kind": "answer", "message": message or "Respuesta.", "estimation": None}, ensure_ascii=False)
+    payload = {"kind": kind, "message": message or "Estimación preparada.", "estimation": tier_draft(tier, **overrides)}
+    return json.dumps(payload, ensure_ascii=False)

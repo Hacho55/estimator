@@ -1,0 +1,12 @@
+<output_format>
+{% include "estimation/" ~ version ~ "/_turn_contract.j2" %}
+Campos propios de este perfil (executive):
+- En work, group es una fase de negocio con nombre sencillo («Descubrimiento», «Construcción»,
+  «Lanzamiento»); tres o cuatro como mucho. El cliente no verá este desglose: sirve para
+  calcular las cifras de cabecera.
+- confidence_level: "low", "medium" o "high", y confidence_reason en una frase.
+- top_three_risks: exactamente tres riesgos que puedan afectar materialmente a la propuesta.
+- go_no_go_recommendation: recomendación accionable para dirección (seguir, seguir con
+  condiciones o no seguir) y por qué.
+{% include "estimation/" ~ version ~ "/_depth.j2" %}
+</output_format>

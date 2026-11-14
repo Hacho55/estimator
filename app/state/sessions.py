@@ -73,9 +73,10 @@ class Session:
     metadata: ProjectMetadata = field(default_factory=ProjectMetadata)
     memory_log: list[MemoryChange] = field(default_factory=list)  # Auditoría de la memoria.
     turns: int = 0  # Turnos completados en toda la vida de la sesión (la ventana no lo recorta).
+    last_tier: str | None = None  # Perfil del último turno, para auditar cambios.
+    owner: str = "anonymous"  # user_id del token que la creó; solo él puede usarla.
     project_type: object | None = None
     form_detail_level: object | None = None
-    output_format: object | None = None
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -98,7 +99,7 @@ class InMemorySessionStore:
             max_active=settings.CONVERSATION_MAX_ACTIVE,
         )
 
-    def create(self) -> Session:
+    def create(self, owner: str = "anonymous") -> Session:
         self._expire()
         while len(self._items) >= self.max_active:
             idle = [item for item in self._items.values() if not item.lock.locked()]
@@ -111,16 +112,18 @@ class InMemorySessionStore:
         session = Session(
             id=str(uuid.uuid4()),
             history=ConversationHistory(max_turns=get_settings().SESSION_MAX_TURNS),
+            owner=owner,
             created_at=now,
             updated_at=now,
         )
         self._items[session.id] = session
         return session
 
-    def get(self, session_id: str) -> Session:
+    def get(self, session_id: str, owner: str = "anonymous") -> Session:
+        """La sesión de ``owner``. La de otro usuario responde igual que una inexistente (404)."""
         self._expire()
         session = self._items.get(session_id)
-        if session is None:
+        if session is None or session.owner != owner:
             raise SessionNotFoundError(session_id)
         self.touch(session)
         return session

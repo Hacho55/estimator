@@ -1,0 +1,9 @@
+<output_format>
+{% include "estimation/" ~ version ~ "/_turn_contract.j2" %}
+Campos propios de este perfil (pm):
+- En work, group es la fase del proyecto.
+- milestones: hitos visibles con name, phase (una de las fases de work) y deliverable
+  (qué se entrega al cerrarlo).
+- blockers: dependencias o decisiones pendientes del cliente que pueden bloquear el plan.
+{% include "estimation/" ~ version ~ "/_depth.j2" %}
+</output_format>

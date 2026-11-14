@@ -149,6 +149,7 @@ def build_messages(
     project_type=None,
     project_metadata: str = "",
     dynamic: DynamicContext | None = None,
+    system_template: str = "system.j2",
 ) -> list[dict]:
     request = _render_request(
         transcription,
@@ -163,6 +164,7 @@ def build_messages(
         prompt_label,
         rates=context_block.static_text,
         examples=context_block.examples_text,
+        system_template=system_template,
     )
     segments = split_system_segments(system)
     messages: list[dict] = [
@@ -245,14 +247,16 @@ def apply_cache_strategy(
     return prepared
 
 
-def build_response_format() -> dict:
+def build_response_format(turn_schema=None, name: str = "turn_output") -> dict:
+    """``json_schema`` del turno. Con tier, el schema es el de su borrador (una salida por perfil)."""
     if get_settings().LLM_RESPONSE_FORMAT == "json_object":
         return {"type": "json_object"}
+    schema = turn_schema or TurnOutput
     return {
         "type": "json_schema",
         "json_schema": {
-            "name": "turn_output",
-            "schema": TurnOutput.model_json_schema(),
+            "name": name,
+            "schema": schema.model_json_schema(),
             "strict": False,
         },
     }
