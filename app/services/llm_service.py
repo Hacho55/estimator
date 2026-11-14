@@ -56,6 +56,7 @@ from app.services.postprocessor import (
 )
 from app.services.prompt_builder import (
     DEFAULT_PROMPT_VERSION,
+    DynamicContext,
     apply_cache_strategy,
     build_messages,
     build_preview,
@@ -129,7 +130,8 @@ class ContextOverrides:
     form_detail_level: object | None = None  # DetailLevel del formulario.
     output_format: object | None = None
     project_type: object | None = None
-    project_metadata: str = ""
+    project_metadata: str = ""  # Bloque JSON de v3.
+    dynamic: DynamicContext | None = None  # Memoria, adjuntos, herramientas y crítico (v4).
     session_window: bool = False  # Sesión: recorta por pares viejos, sin anclas.
 
 
@@ -304,6 +306,24 @@ class _Prepared:
     scrubbed_text: str = ""
     # Hubo turnos antes, aunque el recorte los haya dejado fuera del prompt.
     has_prior_turns: bool = False
+    # Hay contexto dinámico (memoria, adjuntos, herramientas): la caché semántica no aplica.
+    has_dynamic_context: bool = False
+
+
+def _dynamic_payload(dynamic: DynamicContext | None, legacy_metadata: str = "") -> dict | None:
+    """El contexto dinámico que afecta a la respuesta, como dato serializable para las cachés.
+
+    ``legacy_metadata`` es el bloque JSON de v3, que tampoco entra en el hash de versión.
+    """
+    dynamic = dynamic or DynamicContext()
+    payload = {
+        "memory": dynamic.memory,
+        "attachments": dynamic.attachments,
+        "tool_results": dynamic.tool_results,
+        "critic_feedback": dynamic.critic_feedback,
+        "legacy_metadata": legacy_metadata or None,
+    }
+    return payload if any(payload.values()) else None
 
 
 def _field_value(field: object | None) -> str | None:
@@ -391,6 +411,7 @@ def _prepare(
                     output_format=output_format,  # type: ignore[arg-type]
                     project_type=overrides.project_type,
                     project_metadata=overrides.project_metadata,
+            dynamic=overrides.dynamic,
                 ),
                 provider,
                 block,
@@ -420,6 +441,7 @@ def _prepare(
         project_type=_field_value(overrides.project_type),
         form_detail_level=_field_value(form_detail),
         output_format=_field_value(output_format),
+        dynamic=_dynamic_payload(overrides.dynamic, overrides.project_metadata),
     )
     cached = lookup(key)
     return _Prepared(
@@ -440,6 +462,7 @@ def _prepare(
         cache_kind="exact" if cached is not None else None,
         scrubbed_text=transcription,
         has_prior_turns=bool(history_source),
+        has_dynamic_context=_dynamic_payload(overrides.dynamic, overrides.project_metadata) is not None,
     )
 
 
@@ -447,7 +470,7 @@ async def _apply_semantic_cache(prepared: _Prepared, *, model: str) -> _Prepared
     """Tras la caché exacta: mide o sirve un vecino semántico. Solo el primer turno."""
     settings = get_settings()
     mode = settings.SEMANTIC_CACHE_MODE
-    if mode == "off" or prepared.has_prior_turns or prepared.cached is not None:
+    if mode == "off" or prepared.has_prior_turns or prepared.has_dynamic_context or prepared.cached is not None:
         return prepared
     try:
         vector = await llm_client.embed(prepared.scrubbed_text)
@@ -774,6 +797,7 @@ def _history_that_fits(transcription, block, history, overrides, model):
             output_format=output_format,  # type: ignore[arg-type]
             project_type=overrides.project_type,
             project_metadata=overrides.project_metadata,
+            dynamic=overrides.dynamic,
         ),
         block,
         transcription,
@@ -791,6 +815,12 @@ def _history_that_fits(transcription, block, history, overrides, model):
     return select_history(history, max_turns=settings.CONVERSATION_MAX_TURNS, room_tokens=max(room, 0))
 
 
+def _text_of(content) -> str:
+    if isinstance(content, str):
+        return content
+    return "\n".join(part.get("text", "") for part in content if isinstance(part, dict))
+
+
 def _budget(messages, block: ContextBlock, transcription: str, history: list[ChatMessage], model: str):
     settings = get_settings()
     system = system_text_of(messages)
@@ -799,10 +829,12 @@ def _budget(messages, block: ContextBlock, transcription: str, history: list[Cha
     _examples, _, after = rest.partition("</examples>")
     instructions = f"{before}{after}"
     history_text = "\n".join(message.content for message in history)
+    # El turno actual tal como sale (con adjuntos, herramientas o crítico), no solo el texto del cliente.
+    current = _text_of(messages[-1]["content"]) if len(messages) > 1 else transcription
     return build_token_budget(
         instructions=instructions,
         context=block.examples_text,
-        transcription=transcription,
+        transcription=current,
         history=history_text,
         reserved_output=settings.LLM_MAX_TOKENS,
         safety_margin=settings.CONTEXT_SAFETY_MARGIN_TOKENS,

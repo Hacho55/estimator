@@ -7,6 +7,7 @@ editar o crear una carpeta; el resto del código solo elige la versión.
 from __future__ import annotations
 
 import hashlib
+import re
 from pathlib import Path
 from typing import Protocol
 
@@ -67,10 +68,31 @@ def _require_version(version: str) -> None:
         raise UnknownPromptVersionError(f"No existe la versión de prompt '{version}'.")
 
 
+# Etiquetas que delimitan datos en el prompt. Dentro de un dato se neutralizan para
+# que un texto del cliente no pueda cerrar su bloque y abrir otro (regla 1: dato, no programa).
+_BLOCK_TAG = re.compile(
+    r"<(/?)(project_description|user_message|attachments|attachment|tool_results|result|"
+    r"project_metadata|critic_feedback|constraints|scope|reminder|"
+    r"current_memory|user_turn|assistant_turn)\b",
+    re.IGNORECASE,
+)
+
+
+def as_data(value):
+    """Neutraliza las etiquetas de bloque en textos, listas y diccionarios."""
+    if isinstance(value, str):
+        return _BLOCK_TAG.sub(lambda match: f"‹{match.group(1)}{match.group(2)}", value)
+    if isinstance(value, list):
+        return [as_data(item) for item in value]
+    if isinstance(value, dict):
+        return {key: as_data(item) for key, item in value.items()}
+    return value
+
+
 def _context(request: PromptFields, *, rates: str, examples: str, version: str) -> dict:
     project_type = _value(request.project_type)
     return {
-        "description": request.description,
+        "description": as_data(request.description),
         "project_type": project_type.replace("_", " ") if project_type else None,
         "detail_level": _value(request.detail_level),
         "output_format": _value(request.output_format),
@@ -78,6 +100,10 @@ def _context(request: PromptFields, *, rates: str, examples: str, version: str) 
         "examples": examples,
         "version": version,
         "project_metadata": getattr(request, "project_metadata", "") or "",
+        "memory": as_data(getattr(request, "memory", None) or None),
+        "attachments": as_data(getattr(request, "attachments", None) or []),
+        "tool_results": as_data(getattr(request, "tool_results", None) or []),
+        "critic_feedback": as_data(getattr(request, "critic_feedback", None) or []),
     }
 
 
@@ -105,15 +131,36 @@ def render_estimation_prompt(
     return system, user
 
 
+def has_turn_template(version: str) -> bool:
+    """Desde v4, el turno de seguimiento tiene plantilla propia (con adjuntos y herramientas)."""
+    return (_BASE_DIR / "estimation" / version / "turn.j2").is_file()
+
+
+def render_follow_up(request: PromptFields, version: str, *, rates: str = "", examples: str = "") -> str:
+    """Mensaje de usuario de un turno con historial. Solo para versiones con ``turn.j2``."""
+    _require_version(version)
+    context = _context(request, rates=rates, examples=examples, version=version)
+    context["reminder"] = render_reminder(version)
+    return _env.get_template(f"estimation/{version}/turn.j2").render(**context).strip()
+
+
 def render_reminder(version: str = "v1") -> str:
     _require_version(version)
     return _env.get_template(f"estimation/{version}/reminder.j2").render().strip()
 
 
-def render_metadata_prompt(*, previous: str, turn: str, summary: str) -> tuple[str, str]:
-    """Prompt de la segunda llamada. No es una versión de estimación."""
-    system = _env.get_template("metadata/v1/system.j2").render().strip()
-    user = _env.get_template("metadata/v1/user.j2").render(previous=previous, turn=turn, summary=summary).strip()
+METADATA_PROMPT_VERSION = "v2"
+
+
+def render_metadata_prompt(*, previous: str, user_turn: str, assistant_turn: str) -> tuple[str, str]:
+    """Prompt del extractor de memoria (delta). No es una versión de estimación."""
+    folder = f"metadata/{METADATA_PROMPT_VERSION}"
+    system = _env.get_template(f"{folder}/system.j2").render().strip()
+    user = (
+        _env.get_template(f"{folder}/user.j2")
+        .render(previous=as_data(previous), user_turn=as_data(user_turn), assistant_turn=as_data(assistant_turn))
+        .strip()
+    )
     return system, user
 
 

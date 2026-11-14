@@ -6,12 +6,26 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.estimation import Estimation, UsageInfo, ValidationIssue
 
+# Límites de la memoria. Un valor fuera de ellos es una extracción sospechosa.
+MAX_NAME_CHARS = 120
+MAX_SCOPE_CHARS = 2000
+MAX_ITEM_CHARS = 200
+MAX_LIST_ITEMS = 20
+MAX_TEAM_SIZE = 50
+
 
 class ProjectMetadata(BaseModel):
-    project_name: str | None = None
-    assumed_team_size: int | None = None
-    mentioned_technologies: list[str] = Field(default_factory=list)
-    agreed_scope: str | None = None
+    """Memoria de la sesión: hechos destilados del proyecto, aparte del historial.
+
+    Sobrevive al recorte de la ventana. Solo la cambia ``app/state/memory.py``.
+    """
+
+    project_name: str | None = Field(default=None, max_length=MAX_NAME_CHARS)
+    assumed_team_size: int | None = Field(default=None, ge=1, le=MAX_TEAM_SIZE)
+    mentioned_technologies: list[str] = Field(default_factory=list, max_length=MAX_LIST_ITEMS)
+    agreed_scope: str | None = Field(default=None, max_length=MAX_SCOPE_CHARS)
+    explicit_constraints: list[str] = Field(default_factory=list, max_length=MAX_LIST_ITEMS)
+    rejected_options: list[str] = Field(default_factory=list, max_length=MAX_LIST_ITEMS)
 
     def is_empty(self) -> bool:
         return (
@@ -19,30 +33,59 @@ class ProjectMetadata(BaseModel):
             and self.assumed_team_size is None
             and not self.mentioned_technologies
             and not self.agreed_scope
+            and not self.explicit_constraints
+            and not self.rejected_options
         )
 
     def as_prompt_block(self) -> str:
-        """Texto del bloque. Vacío en el primer turno, cuando aún no hay hechos."""
+        """Bloque en JSON para la plantilla ``v3``. ``v4`` renderiza campo a campo."""
         if self.is_empty():
             return ""
         return self.model_dump_json()
 
 
-class ExtractedMetadata(BaseModel):
-    """Salida de la llamada de metadatos: las cuatro claves y nada más.
+class MetadataUpdate(BaseModel):
+    """Delta que devuelve el extractor: qué fijar, qué añadir y qué retirar.
 
-    Un `{}` o un JSON con otra forma no es una extracción válida y no borra los hechos.
+    Estricto: un JSON con otra forma no es una extracción válida. ``null`` o una
+    lista vacía significan «sin cambios en este campo».
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    project_name: str | None
-    assumed_team_size: int | None
-    mentioned_technologies: list[str]
-    agreed_scope: str | None
+    set_project_name: str | None = None
+    set_team_size: int | None = None
+    set_agreed_scope: str | None = None
+    add_technologies: list[str] = Field(default_factory=list)
+    remove_technologies: list[str] = Field(default_factory=list)
+    add_constraints: list[str] = Field(default_factory=list)
+    remove_constraints: list[str] = Field(default_factory=list)
+    add_rejected_options: list[str] = Field(default_factory=list)
+    evidence: str | None = None
 
-    def to_metadata(self) -> ProjectMetadata:
-        return ProjectMetadata(**self.model_dump())
+    def is_empty(self) -> bool:
+        return not any(
+            [
+                self.set_project_name,
+                self.set_team_size is not None,
+                self.set_agreed_scope,
+                self.add_technologies,
+                self.remove_technologies,
+                self.add_constraints,
+                self.remove_constraints,
+                self.add_rejected_options,
+            ]
+        )
+
+
+class MemoryChange(BaseModel):
+    """Una línea de auditoría: qué hecho cambió, en qué turno y con qué evidencia."""
+
+    turn: int
+    field: str
+    before: str | int | list[str] | None = None
+    after: str | int | list[str] | None = None
+    evidence: str | None = None
 
 
 class SessionCreated(BaseModel):
@@ -52,6 +95,7 @@ class SessionCreated(BaseModel):
 class SessionEstimateResponse(BaseModel):
     session_id: str
     project_metadata: ProjectMetadata
+    memory_changes: list[MemoryChange] = Field(default_factory=list)
     kind: Literal["estimation", "estimation_update", "answer"]
     message: str | None = None
     estimation: str | None = None

@@ -37,7 +37,12 @@ class PromptRenderRequest(BaseModel):
     project_type: ProjectType | None = None
     detail_level: DetailLevel = DetailLevel.MEDIUM
     output_format: OutputFormat = OutputFormat.PHASES_TABLE
-    project_metadata: str = ""
+    project_metadata: str = ""  # Bloque JSON de la plantilla v3.
+    # Contexto dinámico de v4: memoria por campos, adjuntos, herramientas y crítico.
+    memory: dict | None = None
+    attachments: list[dict] = Field(default_factory=list)
+    tool_results: list[dict] = Field(default_factory=list)
+    critic_feedback: list[dict] = Field(default_factory=list)
 
 
 class EstimationRequest(BaseModel):

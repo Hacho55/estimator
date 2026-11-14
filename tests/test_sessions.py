@@ -94,10 +94,10 @@ def test_two_turns_update_project_metadata(client, monkeypatch) -> None:
         if name == "extract-metadata":
             scope = "incluye la app móvil" if calls.count("extract-metadata") > 1 else None
             payload = {
-                "project_name": "Portal Atlas",
-                "assumed_team_size": 3,
-                "mentioned_technologies": ["Next.js"],
-                "agreed_scope": scope,
+                "set_project_name": "Portal Atlas",
+                "set_team_size": 3,
+                "add_technologies": ["Next.js"],
+                "set_agreed_scope": scope,
             }
             return _result(json.dumps(payload))
         return _result(estimation_turn())
@@ -129,16 +129,7 @@ def test_pdf_attachment_changes_project_title(client, monkeypatch) -> None:
 
     async def complete(messages, response_format, *, name, metadata=None, model=None, estimated_input_tokens=None):
         if name == "extract-metadata":
-            return _result(
-                json.dumps(
-                    {
-                        "project_name": None,
-                        "assumed_team_size": None,
-                        "mentioned_technologies": [],
-                        "agreed_scope": None,
-                    }
-                )
-            )
+            return _result("{}")
         blob = "\n".join(_message_text(message) for message in messages)
         title = token if token in blob else "Sin adjunto"
         return _result(estimation_turn(project_title=title))
@@ -166,16 +157,7 @@ def test_eight_turns_never_exceed_session_window(client, monkeypatch) -> None:
         if name == "generate-estimate":
             estimate_calls.append(messages)
             return _result(estimation_turn())
-        return _result(
-            json.dumps(
-                {
-                    "project_name": "Ventana",
-                    "assumed_team_size": None,
-                    "mentioned_technologies": [],
-                    "agreed_scope": None,
-                }
-            )
-        )
+        return _result(json.dumps({"set_project_name": "Ventana"}))
 
     _install(monkeypatch, complete)
     session_id = client.post("/sessions").json()["session_id"]
@@ -185,9 +167,10 @@ def test_eight_turns_never_exceed_session_window(client, monkeypatch) -> None:
         assert response.status_code == 200, response.text
 
     assert len(estimate_calls) == 8
-    for messages in estimate_calls:
+    assert "Hechos ya establecidos" not in _message_text(estimate_calls[0][0])  # Turno 1: sin hechos.
+    for messages in estimate_calls[1:]:
         assert messages[0]["role"] == "system"
-        assert "<project_metadata>" in _message_text(messages[0])
+        assert "Nombre del proyecto: Ventana" in _message_text(messages[0])
         assistants = [message for message in messages if message["role"] == "assistant"]
         assert len(assistants) <= 6
     last_assistants = [message for message in estimate_calls[-1] if message["role"] == "assistant"]
@@ -247,13 +230,12 @@ def test_too_many_attachments_is_422(client, monkeypatch) -> None:
 
 
 def _metadata_json(**fields) -> str:
-    payload = {"project_name": None, "assumed_team_size": None, "mentioned_technologies": [], "agreed_scope": None}
-    payload.update(fields)
-    return json.dumps(payload)
+    """Delta del extractor (metadata/v2)."""
+    return json.dumps(fields)
 
 
 def test_empty_metadata_json_keeps_previous_facts(client, monkeypatch) -> None:
-    replies = iter([_metadata_json(project_name="Portal Atlas", assumed_team_size=3), "{}"])
+    replies = iter([_metadata_json(set_project_name="Portal Atlas", set_team_size=3), "{}"])
 
     async def complete(messages, response_format, *, name, metadata=None, model=None, estimated_input_tokens=None):
         if name == "extract-metadata":
@@ -275,7 +257,7 @@ def test_answer_is_valid_after_the_window_drops_every_pair(client, monkeypatch) 
 
     async def complete(messages, response_format, *, name, metadata=None, model=None, estimated_input_tokens=None):
         if name == "extract-metadata":
-            return _result(_metadata_json(assumed_team_size=4))
+            return _result(_metadata_json(set_team_size=4))
         turns.append(name)
         if len(turns) == 1:
             return _result(estimation_turn())
@@ -295,16 +277,16 @@ def test_answer_is_valid_after_the_window_drops_every_pair(client, monkeypatch) 
 
 def test_budget_counts_project_metadata(monkeypatch) -> None:
     from app.services.llm_service import _budget
-    from app.services.prompt_builder import build_messages
+    from app.services.prompt_builder import DynamicContext, build_messages
 
     block = get_context_block(TRANSCRIPT)
 
-    def total(metadata: str) -> int:
-        messages = build_messages(TRANSCRIPT, block, prompt_label="v3", project_metadata=metadata)
+    def total(memory: dict | None) -> int:
+        messages = build_messages(TRANSCRIPT, block, prompt_label="v4", dynamic=DynamicContext(memory=memory))
         return _budget(messages, block, TRANSCRIPT, [], "openrouter/openai/gpt-4o-mini").total_input
 
-    long_scope = _metadata_json(agreed_scope="alcance acordado " * 200)
-    assert total(long_scope) > total("") + 400
+    long_scope = {"agreed_scope": "alcance acordado " * 100}
+    assert total(long_scope) > total(None) + 200
 
 
 def test_store_keeps_sessions_that_are_answering() -> None:
@@ -353,3 +335,141 @@ def test_oversized_body_is_413_before_the_handler(client, monkeypatch) -> None:
     assert response.json()["error"] == "attachment_too_large"
     # El mensaje es el del middleware, no el de read_up_to: cortó antes del handler.
     assert response.json()["detail"].startswith("La petición supera")
+
+
+def test_fact_from_turn_one_survives_after_the_window_drops_it(client, monkeypatch) -> None:
+    systems: list[str] = []
+    turn = {"n": 0}
+
+    async def complete(messages, response_format, *, name, metadata=None, model=None, estimated_input_tokens=None):
+        if name == "extract-metadata":
+            turn["n"] += 1
+            if turn["n"] == 1:
+                return _result(_metadata_json(set_project_name="BookFlow", evidence="se llama BookFlow"))
+            return _result("{}")
+        systems.append(_message_text(messages[0]))
+        return _result(estimation_turn())
+
+    _install(monkeypatch, complete)
+    session_id = client.post("/sessions").json()["session_id"]
+    first = f"{TRANSCRIPT} El proyecto se llama BookFlow."
+    assert client.post(f"/sessions/{session_id}/estimate", data={"transcript": first, **FORM}).status_code == 200
+    for index in range(7):
+        response = client.post(f"/sessions/{session_id}/estimate", data={"transcript": f"Ajuste {index}.", **FORM})
+        assert response.status_code == 200, response.text
+    from app.state.sessions import get_session_store
+
+    window = get_session_store().get(session_id).history.messages
+    assert all("BookFlow" not in message.content for message in window)  # El turno 1 salió de la ventana.
+    assert "Nombre del proyecto: BookFlow" in systems[-1]
+    assert response.json()["project_metadata"]["project_name"] == "BookFlow"
+
+
+def test_user_revision_moves_technology_to_rejected_options(client, monkeypatch) -> None:
+    replies = iter(
+        [
+            _metadata_json(add_technologies=["Rails", "React"]),
+            _metadata_json(remove_technologies=["Rails"], add_technologies=["Node.js"], evidence="ya no usamos Rails"),
+        ]
+    )
+
+    async def complete(messages, response_format, *, name, metadata=None, model=None, estimated_input_tokens=None):
+        if name == "extract-metadata":
+            return _result(next(replies))
+        return _result(estimation_turn())
+
+    _install(monkeypatch, complete)
+    session_id = client.post("/sessions").json()["session_id"]
+    client.post(f"/sessions/{session_id}/estimate", data={"transcript": TRANSCRIPT, **FORM})
+    second = client.post(
+        f"/sessions/{session_id}/estimate",
+        data={"transcript": "Ya no usamos Rails, vamos con Node.", **FORM},
+    )
+    body = second.json()
+    assert body["project_metadata"]["mentioned_technologies"] == ["React", "Node.js"]
+    assert body["project_metadata"]["rejected_options"] == ["Rails"]
+    changed = {change["field"]: change for change in body["memory_changes"]}
+    assert changed["rejected_options"]["turn"] == 2
+    assert changed["rejected_options"]["evidence"] == "ya no usamos Rails"
+
+
+def test_failed_extraction_keeps_memory_and_counts_its_latency(client, monkeypatch) -> None:
+    import asyncio
+
+    async def complete(messages, response_format, *, name, metadata=None, model=None, estimated_input_tokens=None):
+        if name == "extract-metadata":
+            await asyncio.sleep(0.05)
+            raise RuntimeError("timeout del extractor")
+        return _result(estimation_turn())
+
+    _install(monkeypatch, complete)
+    session_id = client.post("/sessions").json()["session_id"]
+    response = client.post(f"/sessions/{session_id}/estimate", data={"transcript": TRANSCRIPT, **FORM})
+    assert response.status_code == 200
+    assert response.json()["latency_ms"] >= 5 + 50  # Estimación (5 ms) más el intento fallido.
+    assert response.json()["memory_changes"] == []
+
+
+def test_metadata_extractor_uses_its_own_model(client, monkeypatch) -> None:
+    monkeypatch.setenv("METADATA_MODEL", "openrouter/openai/gpt-4.1-nano")
+    get_settings.cache_clear()
+    models: dict[str, str | None] = {}
+
+    async def complete(messages, response_format, *, name, metadata=None, model=None, estimated_input_tokens=None):
+        models[name] = model
+        if name == "extract-metadata":
+            return _result("{}")
+        return _result(estimation_turn())
+
+    _install(monkeypatch, complete)
+    session_id = client.post("/sessions").json()["session_id"]
+    client.post(f"/sessions/{session_id}/estimate", data={"transcript": TRANSCRIPT, **FORM})
+    assert models["extract-metadata"] == "openrouter/openai/gpt-4.1-nano"
+
+
+def test_audit_turn_keeps_counting_past_the_window(client, monkeypatch) -> None:
+    calls = {"n": 0}
+
+    async def complete(messages, response_format, *, name, metadata=None, model=None, estimated_input_tokens=None):
+        if name == "extract-metadata":
+            calls["n"] += 1
+            return _result(_metadata_json(add_constraints=[f"restricción {calls['n']}"]))
+        return _result(estimation_turn())
+
+    _install(monkeypatch, complete)
+    session_id = client.post("/sessions").json()["session_id"]
+    for index in range(8):
+        text = TRANSCRIPT if index == 0 else f"Ajuste {index}."
+        response = client.post(f"/sessions/{session_id}/estimate", data={"transcript": text, **FORM})
+    assert response.json()["memory_changes"][0]["turn"] == 8
+
+
+def test_exact_cache_key_depends_on_memory() -> None:
+    from app.services.llm_service import _dynamic_payload
+    from app.services.prompt_builder import DynamicContext
+    from app.state.response_cache import cache_key
+
+    base = dict(transcription="t", model="m", temperature=0.0, prompt_version="v4-x", history=[])
+    with_memory = cache_key(**base, dynamic=_dynamic_payload(DynamicContext(memory={"project_name": "A"})))
+    other_memory = cache_key(**base, dynamic=_dynamic_payload(DynamicContext(memory={"project_name": "B"})))
+    assert with_memory != other_memory != cache_key(**base)
+    assert _dynamic_payload(DynamicContext()) is None
+
+
+def test_budget_counts_rendered_dynamic_context() -> None:
+    from app.services.llm_service import _budget
+    from app.services.prompt_builder import DynamicContext, build_messages
+
+    block = get_context_block(TRANSCRIPT)
+    attachment = {"name": "spec.pdf", "text": "requisito " * 300, "truncated": False}
+    plain = build_messages(TRANSCRIPT, block, prompt_label="v4")
+    rich = build_messages(TRANSCRIPT, block, prompt_label="v4", dynamic=DynamicContext(attachments=[attachment]))
+    model = "openrouter/openai/gpt-4o-mini"
+    assert _budget(rich, block, TRANSCRIPT, [], model).total_input > _budget(plain, block, TRANSCRIPT, [], model).total_input + 250
+
+
+def test_exact_cache_key_depends_on_legacy_metadata() -> None:
+    from app.services.llm_service import _dynamic_payload
+
+    assert _dynamic_payload(None, '{"project_name": "A"}') != _dynamic_payload(None, '{"project_name": "B"}')
+    assert _dynamic_payload(None, "") is None

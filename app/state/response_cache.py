@@ -36,8 +36,11 @@ def cache_key(
     project_type: str | None = None,
     form_detail_level: str | None = None,
     output_format: str | None = None,
+    dynamic: dict | None = None,
 ) -> str:
     payload = {
+        # Memoria, adjuntos, herramientas y crítico cambian la respuesta: forman parte de la clave.
+        "dynamic": dynamic or {},
         "transcription": transcription,
         "model": model,
         "temperature": temperature,

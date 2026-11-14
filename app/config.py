@@ -64,6 +64,8 @@ class Settings(BaseSettings):
     CONVERSATION_MAX_TURNS: int = Field(10, gt=0)
     # Sesiones: ventana deslizante sin anclas. Un turno es un par user/assistant.
     SESSION_MAX_TURNS: int = Field(6, gt=0)
+    # Extractor de memoria: modelo barato. Vacío = LLM_MODEL.
+    METADATA_MODEL: str = ""
     ATTACHMENT_MAX_FILES: int = Field(5, gt=0)
     ATTACHMENT_MAX_BYTES: int = Field(5_000_000, gt=0)
     # Tamaño descomprimido máximo de un DOCX (es un zip).

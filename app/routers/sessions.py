@@ -4,22 +4,27 @@ from __future__ import annotations
 
 import asyncio
 
+import structlog
 from fastapi import APIRouter, File, Form, UploadFile
 
 from app.attachments.extractor import attachment_label, extract_text, join_attachments, read_up_to
 from app.config import get_settings
 from app.observability import traced_span
-from app.schemas.conversation import ChatMessage
 from app.schemas.estimation import DetailLevel, ErrorResponse, OutputFormat, ProjectType, UsageInfo
-from app.schemas.session import SessionCreated, SessionEstimateResponse
+from app.schemas.session import MemoryChange, ProjectMetadata, SessionCreated, SessionEstimateResponse
 from app.services.errors import AttachmentRejectedError, AttachmentTooLargeError, InputRejectedError
 from app.services.llm_service import ContextOverrides, generate_estimation
-from app.services.metadata_extractor import extract_project_metadata
+from app.services.metadata_extractor import extract_metadata_update
+from app.services.prompt_builder import DynamicContext
+from app.state.memory import apply_update
 from app.state.sessions import get_session_store
+
+log = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
-SESSION_PROMPT_VERSION = "v3"
+SESSION_PROMPT_VERSION = "v4"
+MEMORY_LOG_MAX = 200  # Registro de auditoría acotado por sesión.
 
 _ERRORS = {
     404: {"model": ErrorResponse},
@@ -57,12 +62,8 @@ async def estimate_session(
         extracted = await _read_attachments(attachments or [])
         combined = join_attachments(text, extracted)
         _remember_form(session, project_type, detail_level, output_format)
-        listed = session.history.to_messages_list(session.metadata.as_prompt_block())
-        history = [
-            ChatMessage(role=item["role"], content=item["content"], kind=item.get("kind"))
-            for item in listed
-            if item["role"] != "system"
-        ]
+        history = list(session.history.messages)
+        memory = None if session.metadata.is_empty() else session.metadata.model_dump()
         result = await generate_estimation(
             combined,
             history,
@@ -71,26 +72,29 @@ async def estimate_session(
                 form_detail_level=session.form_detail_level,
                 output_format=session.output_format,
                 project_type=session.project_type,
-                project_metadata=session.metadata.as_prompt_block(),
+                dynamic=DynamicContext(memory=memory),
                 session_window=True,
             ),
             session_id=session.id,
         )
-        summary = _summary(result)
+        user_turn = result.scrubbed_input or combined
         with traced_span("extract-metadata"):
-            extraction = await extract_project_metadata(
+            extraction = await extract_metadata_update(
                 previous=session.metadata,
-                turn=result.scrubbed_input or combined,
-                summary=summary,
+                user_turn=user_turn,
+                assistant_turn=_assistant_turn(result),
             )
-        session.metadata = extraction.metadata
-        session.history.append(
-            result.scrubbed_input or combined,
-            result.history_content,
-            result.kind,
-        )
+        turn_number = session.turns + 1
+        merged = apply_update(session.metadata, extraction.update, turn=turn_number)
+        if merged.discarded:
+            log.info("memory_update_discarded", session_id=session.id, reasons=merged.discarded)
+        session.metadata = merged.metadata
+        session.memory_log.extend(merged.changes)
+        del session.memory_log[:-MEMORY_LOG_MAX]
+        session.history.append(user_turn, result.history_content, result.kind)
+        session.turns = turn_number
         store.touch(session)
-        return _response(session.id, extraction, result)
+        return _response(session.id, session.metadata, merged.changes, extraction, result)
 
 
 def _bounded_transcript(transcript: str, *, first_turn: bool) -> str:
@@ -149,22 +153,30 @@ async def _read_attachments(uploads: list[UploadFile]) -> list[tuple[str, str]]:
     return extracted
 
 
-def _summary(result) -> str:
+def _assistant_turn(result) -> str:
+    """Lo que el extractor ve de la respuesta: mensaje, título y resumen ya validados."""
+    parts = [result.message or ""]
     estimation = result.estimation
-    if estimation is None:
-        return result.message or ""
-    title = getattr(estimation, "project_title", "") or ""
-    summary = getattr(estimation, "summary", "") or ""
-    return f"{title}. {summary}".strip()
+    if estimation is not None:
+        parts.append(getattr(estimation, "project_title", "") or "")
+        parts.append(getattr(estimation, "summary", "") or "")
+    return "\n".join(part for part in parts if part).strip()
 
 
-def _response(session_id: str, extraction, result) -> SessionEstimateResponse:
+def _response(
+    session_id: str,
+    memory: ProjectMetadata,
+    changes: list[MemoryChange],
+    extraction,
+    result,
+) -> SessionEstimateResponse:
     estimation = None if result.kind == "answer" else result.estimation
     usage = _plus_usage(result.usage, extraction.usage)
     cost = _plus_cost(result.cost_usd, extraction.cost_usd)
     return SessionEstimateResponse(
         session_id=session_id,
-        project_metadata=extraction.metadata,
+        project_metadata=memory,
+        memory_changes=changes,
         kind=result.kind,
         message=result.message,
         estimation=result.estimation_markdown,
@@ -176,7 +188,7 @@ def _response(session_id: str, extraction, result) -> SessionEstimateResponse:
         usage=usage,
         cost_usd=cost,
         latency_ms=result.latency_ms + extraction.latency_ms,
-        cache_hit=result.cache_hit and extraction.usage is None,
+        cache_hit=result.cache_hit,
         cache_kind=result.cache_kind,
         cache_similarity=result.cache_similarity,
         trace_id=result.trace_id,

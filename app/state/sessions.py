@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 
 from app.config import get_settings
 from app.schemas.conversation import ChatMessage
-from app.schemas.session import ProjectMetadata
+from app.schemas.session import MemoryChange, ProjectMetadata
 from app.services.errors import SessionNotFoundError
 from app.tokens import count_tokens
 
@@ -71,6 +71,8 @@ class Session:
     id: str
     history: ConversationHistory
     metadata: ProjectMetadata = field(default_factory=ProjectMetadata)
+    memory_log: list[MemoryChange] = field(default_factory=list)  # Auditoría de la memoria.
+    turns: int = 0  # Turnos completados en toda la vida de la sesión (la ventana no lo recorta).
     project_type: object | None = None
     form_detail_level: object | None = None
     output_format: object | None = None

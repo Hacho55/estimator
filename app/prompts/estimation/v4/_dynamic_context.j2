@@ -1,0 +1,27 @@
+{% if attachments %}
+<attachments>
+{% for item in attachments %}
+<attachment name="{{ item.name }}"{% if item.truncated %} truncated="true"{% endif %}>
+{{ item.text }}
+</attachment>
+{% endfor %}
+</attachments>
+{% endif %}
+{% if tool_results %}
+<tool_results>
+{% for item in tool_results %}
+<result tool="{{ item.tool }}"{% if item.error %} error="true"{% endif %}>
+{{ item.content }}
+</result>
+{% endfor %}
+</tool_results>
+{% endif %}
+{% if critic_feedback %}
+<critic_feedback>
+Un auditor revisó tu respuesta anterior. Corrige estos puntos en la nueva versión:
+{% for issue in critic_feedback %}
+- [{{ issue.severity }}] {{ issue.category }} en {{ issue.field_path }}: {{ issue.description }}{% if issue.suggested_fix %} Sugerencia: {{ issue.suggested_fix }}{% endif %}
+
+{% endfor %}
+</critic_feedback>
+{% endif %}

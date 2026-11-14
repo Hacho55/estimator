@@ -1,15 +1,21 @@
-"""Segunda llamada corta. Si falla, la estimación sigue y los hechos no cambian."""
+"""Extractor de memoria: una llamada corta que propone un delta.
+
+No fusiona: devuelve un ``MetadataUpdate`` y ``app/state/memory.py`` decide qué
+entra. Si la llamada o el JSON fallan, devuelve un delta vacío (la memoria no
+cambia) y la latencia del intento, para que el coste no quede oculto.
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 
 import structlog
 
 from app.config import get_settings
 from app.prompts.loader import render_metadata_prompt
 from app.schemas.estimation import UsageInfo
-from app.schemas.session import ExtractedMetadata, ProjectMetadata
+from app.schemas.session import MetadataUpdate, ProjectMetadata
 from app.services import llm_client
 
 log = structlog.get_logger(__name__)
@@ -17,10 +23,11 @@ log = structlog.get_logger(__name__)
 
 @dataclass
 class MetadataExtraction:
-    metadata: ProjectMetadata
+    update: MetadataUpdate = field(default_factory=MetadataUpdate)
     usage: UsageInfo | None = None
     cost_usd: float | None = None
     latency_ms: float = 0
+    ok: bool = True
 
 
 def metadata_response_format() -> dict:
@@ -29,8 +36,8 @@ def metadata_response_format() -> dict:
     return {
         "type": "json_schema",
         "json_schema": {
-            "name": "project_metadata",
-            "schema": ExtractedMetadata.model_json_schema(),
+            "name": "metadata_update",
+            "schema": MetadataUpdate.model_json_schema(),
             "strict": False,
         },
     }
@@ -46,30 +53,33 @@ def _usage_of(result: llm_client.LLMResult) -> UsageInfo:
     )
 
 
-async def extract_project_metadata(
+async def extract_metadata_update(
     *,
     previous: ProjectMetadata,
-    turn: str,
-    summary: str,
+    user_turn: str,
+    assistant_turn: str,
 ) -> MetadataExtraction:
     system, user = render_metadata_prompt(
         previous=previous.model_dump_json(),
-        turn=turn,
-        summary=summary,
+        user_turn=user_turn,
+        assistant_turn=assistant_turn,
     )
+    settings = get_settings()
+    started = time.perf_counter()
     try:
         result = await llm_client.complete(
             [{"role": "system", "content": system}, {"role": "user", "content": user}],
             metadata_response_format(),
             name="extract-metadata",
+            model=settings.METADATA_MODEL.strip() or None,
         )
     except Exception as exc:  # noqa: BLE001
         log.warning("metadata_extraction_failed", reason=str(exc))
-        return MetadataExtraction(metadata=previous)
+        return MetadataExtraction(latency_ms=(time.perf_counter() - started) * 1000, ok=False)
     usage = _usage_of(result)
     try:
-        metadata = ExtractedMetadata.model_validate_json(result.content).to_metadata()
+        update = MetadataUpdate.model_validate_json(result.content)
     except Exception as exc:  # noqa: BLE001
         log.warning("metadata_extraction_failed", reason=str(exc))
-        return MetadataExtraction(metadata=previous, usage=usage, cost_usd=result.cost_usd, latency_ms=result.latency_ms)
-    return MetadataExtraction(metadata=metadata, usage=usage, cost_usd=result.cost_usd, latency_ms=result.latency_ms)
+        return MetadataExtraction(usage=usage, cost_usd=result.cost_usd, latency_ms=result.latency_ms, ok=False)
+    return MetadataExtraction(update=update, usage=usage, cost_usd=result.cost_usd, latency_ms=result.latency_ms)

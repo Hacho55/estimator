@@ -16,6 +16,7 @@ Material de enseñanza en `/Users/horaciosuarez/DEVS/AI-Eng/lidr-ai-engineering`
 - Validación de la estimación: `app/services/postprocessor.py`.
 - Guardrails (política declarada por control): `app/services/guardrails.py`.
 - Orquestación: `app/services/llm_service.py` (`generate_estimation`). No conoce HTTP.
+- Memoria de la sesión (hechos del proyecto): el extractor propone un delta en `app/services/metadata_extractor.py` y `app/state/memory.py` lo valida y fusiona, sin LLM. Las sesiones usan una ventana deslizante sin anclas porque los hechos que importan viven en la memoria, que no se recorta.
 - Historial de conversación y caché exacta: `app/state/` en memoria del proceso. Caché semántica: `app/state/semantic_cache.py` (Redis si hay `REDIS_URL`; si no, memoria). Nunca dentro de `services/`.
 - Pydantic va en `app/schemas/`. `app/models/` queda reservado para el ORM de más adelante.
 
@@ -25,7 +26,7 @@ Menos es más. El preprocesamiento anonimiza, normaliza y calcula los totales; e
 
 ## Conversación y formulario
 
-`POST /api/v1/estimate` sigue siendo de un solo turno con `transcription`. El formulario tipado y la conversación del front viven en `/api/v2`. En el historial se guarda la estimación ya corregida, no la salida en bruto. El primer turno y la última estimación no se descartan. Un solo worker: conversaciones y caché exacta son memoria del proceso.
+`POST /api/v1/estimate` sigue siendo de un solo turno con `transcription`. El formulario tipado y la conversación del front viven en `/api/v2`. En el historial se guarda la estimación ya corregida, no la salida en bruto. En `/api/v2/conversations`, el primer turno y la última estimación no se descartan; en `/sessions` la ventana es simple y la memoria guarda los hechos. Un solo worker: conversaciones y caché exacta son memoria del proceso.
 
 ## Revisión
 
