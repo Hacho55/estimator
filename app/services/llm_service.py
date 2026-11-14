@@ -11,7 +11,7 @@ La implementación vive en app/observability.py.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 
 from app.config import derive_provider, get_settings
@@ -46,7 +46,7 @@ from app.services.errors import (
     LLMUnavailableError,
     PromptVersionError,
 )
-from app.services.guardrails import guard_input, guard_output, redact_pii
+from app.services.guardrails import guard_dynamic_text, guard_input, guard_output, redact_pii
 from app.services.postprocessor import (
     parse_turn,
     preview_markdown,
@@ -86,7 +86,7 @@ from app.state.semantic_cache import (
 )
 from app.state.sessions import slide_history
 from app.tiers import TierConfig, resolve_tier_config
-from app.tokens import CACHE_MIN_TOKENS, build_token_budget
+from app.tokens import CACHE_MIN_TOKENS, build_token_budget, count_tokens
 
 GATEWAY = "litellm"
 # Sesión 3 · routing: por debajo de esto, y con un solo requisito técnico, cabe el modelo barato.
@@ -172,6 +172,7 @@ class TurnResult:
     scrubbed_input: str = ""
     tier: str | None = None
     view: object | None = None  # Vista del tier para el cliente (app/schemas/tiers.py).
+    attachments_used: list[dict] = field(default_factory=list)  # Adjuntos ya tachados que vio el modelo.
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     def to_estimation_response(self) -> EstimationResponse:
@@ -268,9 +269,9 @@ async def generate_estimation(
     session_id: str | None = None,
 ) -> TurnResult:
     settings = get_settings()
-    overrides = overrides or ContextOverrides()
+    overrides = _guard_dynamic(overrides or ContextOverrides())
     scrubbed = guard_input(transcription)
-    model = overrides.model or choose_model(scrubbed, has_history=bool(conversation_history))
+    model = overrides.model or choose_model(_routing_text(scrubbed, overrides), has_history=bool(conversation_history))
     provider = derive_provider(model)
     # Observabilidad: etiquetas de la traza. No viajan al modelo.
     tags = [
@@ -323,6 +324,29 @@ class _Prepared:
     has_dynamic_context: bool = False
     tier: str | None = None
     memory: dict | None = None  # Memoria de la sesión, para las propiedades online.
+    attachments: list[dict] = field(default_factory=list)
+
+
+def _routing_text(scrubbed: str, overrides: ContextOverrides) -> str:
+    """Lo que mide la complejidad para elegir modelo: la transcripción y sus adjuntos."""
+    attachments = overrides.dynamic.attachments if overrides.dynamic else []
+    return "\n".join([scrubbed, *(item.get("text", "") for item in attachments)])
+
+
+def _guard_dynamic(overrides: ContextOverrides) -> ContextOverrides:
+    """Adjuntos y resultados de herramientas pasan su guardrail (PII tachada, inyección registrada)."""
+    dynamic = overrides.dynamic
+    if dynamic is None or not (dynamic.attachments or dynamic.tool_results):
+        return overrides
+    attachments = [
+        {**item, "text": guard_dynamic_text(item.get("text", ""), source="attachment")} for item in dynamic.attachments
+    ]
+    tool_results = [
+        {**item, "content": guard_dynamic_text(item.get("content", ""), source=f"tool:{item.get('tool')}")}
+        for item in dynamic.tool_results
+    ]
+    guarded = replace(dynamic, attachments=attachments, tool_results=tool_results)
+    return replace(overrides, dynamic=guarded)
 
 
 def _redact_text(text: str) -> str:
@@ -448,7 +472,7 @@ def _prepare(
             )
         except UnknownPromptVersionError as exc:
             raise PromptVersionError(str(exc)) from exc
-        budget = _budget(messages, block, transcription, history, model)
+        budget = _budget(messages, block, transcription, history, model, overrides.dynamic)
         if not budget.fits:
             raise ContextBudgetExceededError(
                 "La petición no cabe en la ventana de contexto con el margen de seguridad. "
@@ -490,6 +514,7 @@ def _prepare(
         ),
         tier=tier_config.tier.value if tier_config else None,
         memory=overrides.dynamic.memory if overrides.dynamic else None,
+        attachments=list(overrides.dynamic.attachments) if overrides.dynamic else [],
         metadata={"prompt_version": version, "examples": ",".join(block.included_ids)},
         key=key,
         cached=cached,
@@ -570,10 +595,12 @@ class EstimationStream:
 
     async def _iterate(self):
         settings = get_settings()
-        overrides = self.overrides
+        overrides = self.overrides = _guard_dynamic(self.overrides)
         scrubbed = guard_input(self.transcription)
         self.transcription = scrubbed
-        model = overrides.model or choose_model(scrubbed, has_history=bool(self.conversation_history))
+        model = overrides.model or choose_model(
+            _routing_text(scrubbed, overrides), has_history=bool(self.conversation_history)
+        )
         provider = derive_provider(model)
         tags = [
             "estimation",
@@ -799,6 +826,7 @@ async def _assemble(first: llm_client.LLMResult, prepared: _Prepared, *, transcr
         scrubbed_input=transcription,
         tier=prepared.tier,
         view=view,
+        attachments_used=prepared.attachments,
     )
     # Observabilidad: la estimación ya está en result. Esto solo puntúa y registra.
     scores = collect_metrics(
@@ -860,6 +888,7 @@ def _history_that_fits(transcription, block, history, overrides, model):
         transcription,
         [],
         model,
+        overrides.dynamic,
     )
     room = (
         settings.MODEL_CONTEXT_WINDOW
@@ -878,7 +907,15 @@ def _text_of(content) -> str:
     return "\n".join(part.get("text", "") for part in content if isinstance(part, dict))
 
 
-def _budget(messages, block: ContextBlock, transcription: str, history: list[ChatMessage], model: str):
+def _budget(
+    messages,
+    block: ContextBlock,
+    transcription: str,
+    history: list[ChatMessage],
+    model: str,
+    dynamic: DynamicContext | None = None,
+):
+    """Presupuesto por bloque. Cada fuente de contexto dinámico tiene el suyo (regla 2 de la fase 1)."""
     settings = get_settings()
     system = system_text_of(messages)
     # Todo el system salvo los ejemplos, que van aparte: incluye scope, constraints y metadatos.
@@ -886,12 +923,21 @@ def _budget(messages, block: ContextBlock, transcription: str, history: list[Cha
     _examples, _, after = rest.partition("</examples>")
     instructions = f"{before}{after}"
     history_text = "\n".join(message.content for message in history)
-    # El turno actual tal como sale (con adjuntos, herramientas o crítico), no solo el texto del cliente.
+    dynamic = dynamic or DynamicContext()
+    extra = {
+        "attachments": "\n".join(item.get("text", "") for item in dynamic.attachments),
+        "tool_results": "\n".join(item.get("content", "") for item in dynamic.tool_results),
+        "critic_feedback": "\n".join(item.get("description", "") for item in dynamic.critic_feedback),
+    }
+    # Lo que envuelve el turno (recordatorio, etiquetas) para que el total sea el mensaje real.
     current = _text_of(messages[-1]["content"]) if len(messages) > 1 else transcription
+    framing = max(0, count_tokens(current) - count_tokens(transcription) - sum(count_tokens(t) for t in extra.values()))
     return build_token_budget(
         instructions=instructions,
         context=block.examples_text,
-        transcription=current,
+        transcription=transcription,
+        extra_blocks={name: text for name, text in extra.items() if text},
+        framing_tokens=framing,
         history=history_text,
         reserved_output=settings.LLM_MAX_TOKENS,
         safety_margin=settings.CONTEXT_SAFETY_MARGIN_TOKENS,

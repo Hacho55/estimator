@@ -37,13 +37,19 @@ def build_token_budget(
     window: int,
     model: str,
     cacheable: str,
+    extra_blocks: dict[str, str] | None = None,
+    framing_tokens: int = 0,
 ) -> TokenBudget:
+    """Un bloque por fuente. ``extra_blocks``: contexto dinámico (adjuntos, herramientas, crítico)."""
     blocks = [
         TokenBlock(name="instructions", tokens=count_tokens(instructions)),
         TokenBlock(name="context", tokens=count_tokens(context)),
         TokenBlock(name="history", tokens=count_tokens(history)),
         TokenBlock(name="transcription", tokens=count_tokens(transcription)),
     ]
+    blocks += [TokenBlock(name=name, tokens=count_tokens(text)) for name, text in (extra_blocks or {}).items()]
+    if framing_tokens:
+        blocks.append(TokenBlock(name="turn_framing", tokens=framing_tokens))
     total_input = sum(block.tokens for block in blocks)
     used = total_input + reserved_output + safety_margin
     return TokenBudget(

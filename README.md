@@ -113,6 +113,10 @@ Cada cambio en `.env` exige reiniciar uvicorn. La configuración se lee una vez 
 | `ATTACHMENT_MAX_FILES` | no | `5` | entero mayor que 0 | Adjuntos por petición en `/sessions/{id}/estimate` |
 | `ATTACHMENT_MAX_BYTES` | no | `5000000` | entero mayor que 0 | Tamaño máximo de cada adjunto |
 | `ATTACHMENT_MAX_EXPANDED_BYTES` | no | `50000000` | entero mayor que 0 | Tamaño descomprimido máximo de un DOCX. El cuerpo multipart entero se corta en `ATTACHMENT_MAX_FILES × ATTACHMENT_MAX_BYTES` más el texto |
+| `ATTACHMENT_MAX_CHARS` | no | `40000` | entero mayor que 0 | Texto de todos los adjuntos de un turno. Lo que pase se trunca y se avisa (`attachment_truncated`) |
+| `METADATA_ATTACHMENT_CHARS` | no | `12000` | entero ≥ 0 | Texto de adjuntos que ve el extractor de memoria |
+| `SESSION_IDLE_ARCHIVE_HOURS` | no | `24` | horas | Sin actividad, la sesión se archiva: no admite turnos (409) |
+| `SESSION_ARCHIVE_RETENTION_HOURS` | no | `72` | horas | Una sesión archivada se purga pasado este tiempo |
 | `METADATA_MODEL` | no | vacío (`LLM_MODEL`) | id de LiteLLM | Modelo del extractor de memoria de `/sessions` |
 | `AUTH_MODE` | no | `off` | `jwt`, `off` | Cómo llega el tier: JWT del backend de negocio o `DEFAULT_TIER` fijo. Nunca del cuerpo |
 | `DEFAULT_TIER` | no | `developer` | `developer`, `pm`, `executive` | Tier con `AUTH_MODE=off` |
@@ -214,9 +218,17 @@ curl -s -X POST localhost:8000/sessions -H "Authorization: Bearer $TOKEN"
 curl -s -X POST "localhost:8000/sessions/$SESSION_ID/estimate" -H "Authorization: Bearer $TOKEN" -F transcript="$(cat data/transcripcion_reunion.md)" -F project_type=web_saas -F detail_level=medium
 ```
 
-### Almacén y ventana
+### Almacén, ventana y olvido
 
-La sesión vive en memoria del proceso, sin base de datos y sin Redis. Se pierde al reiniciar, caduca con `CONVERSATION_TTL_MINUTES` y no pasa de `CONVERSATION_MAX_ACTIVE`. Hace falta un solo worker. El historial guarda solo pares user/assistant (`SESSION_MAX_TURNS`, por defecto 6) y no conserva anclas: los hechos que importan viven en la memoria (`project_metadata`), que no se recorta. El system prompt no cuenta como turno: se regenera en cada llamada. `/api/v1` y `/api/v2` siguen con su ventana de anclas y no usan este almacén.
+La sesión vive en memoria del proceso, sin base de datos y sin Redis, y no pasa de `CONVERSATION_MAX_ACTIVE`. Hace falta un solo worker. El historial guarda solo pares user/assistant (`SESSION_MAX_TURNS`, por defecto 6) y no conserva anclas: los hechos que importan viven en la memoria (`project_metadata`), que no se recorta. El system prompt no cuenta como turno: se regenera en cada llamada. `/api/v1` y `/api/v2` siguen con su ventana de anclas y no usan este almacén.
+
+Olvidar es explícito, en tres sitios:
+
+- **Revisión** (memoria): si el usuario retira una tecnología, pasa a `rejected_options` y no se vuelve a proponer.
+- **Caducidad** (almacén): tras `SESSION_IDLE_ARCHIVE_HOURS` sin actividad la sesión se archiva. Un turno sobre ella da 409 `session_archived`; se conserva para auditoría y se purga tras `SESSION_ARCHIVE_RETENTION_HOURS`.
+- **Reset** (endpoint): `POST /sessions` con `{"previous_session_id": "...", "inherit_memory": false}` archiva la anterior y empieza de cero; con `inherit_memory: true` arranca con sus hechos y sin historial.
+
+`GET /sessions/{id}` devuelve lo auditable: estado, turnos, tier, memoria y registro de cambios (`memory_log`), sin el texto del historial. `Session.to_record()` serializa historial y memoria por separado (`app/state/sessions.py`, contrato `SessionStore`), para que pasar a Redis no obligue a tocar el modelo.
 
 Los tests, incluidos los de sesión, corren con:
 
@@ -226,7 +238,9 @@ uv run pytest
 
 ### Adjuntos (camino B)
 
-El texto se extrae en el proceso con `pypdf` (PDF) y `python-docx` (Word) y se concatena a la transcripción con `--- attachment: nombre ---`. No se llama a la Files API.
+El texto se extrae en el proceso, fuera del event loop, con `pypdf` (PDF, con marca `--- página N ---`) y `python-docx` (Word, con tablas en orden). No se llama a la Files API. Cada adjunto entra en el mensaje de usuario en su propio bloque `<attachment name="…">` dentro de `<attachments>`, declarado como dato: pasa el guardrail de PII y la inyección solo se registra. Todos los adjuntos de un turno comparten `ATTACHMENT_MAX_CHARS`; lo que sobra se trunca con aviso. La respuesta lista `attachments` (páginas, caracteres, si se truncó y milisegundos) y el presupuesto de tokens tiene un bloque `attachments`.
+
+El adjunto se paga una vez: el historial guarda `[adjunto: nombre, N caracteres]`, no el texto. Lo que haya que recordar llega a la memoria, porque el extractor ve un extracto (`METADATA_ATTACHMENT_CHARS`). El primer turno exige 50 caracteres entre transcripción y adjuntos.
 
 Se probó el otro camino contra el proxy: un PDF mínimo como bloque `type: file` con `file_data` en base64, por `chat.completions`. El modelo del entorno (`openrouter/anthropic/claude-sonnet-5.5`) y el de reserva (`openrouter/anthropic/claude-haiku-4.5`) devolvieron el código impreso en el PDF. No basta como camino único: un `.docx` no viaja en ese bloque, y el ejercicio pide un solo camino para PDF y Word.
 

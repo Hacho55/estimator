@@ -72,6 +72,13 @@ class Settings(BaseSettings):
     AI_SERVICE_SECRET: SecretStr = SecretStr("")
     ATTACHMENT_MAX_FILES: int = Field(5, gt=0)
     ATTACHMENT_MAX_BYTES: int = Field(5_000_000, gt=0)
+    # Texto de todos los adjuntos de un turno. Lo que pase se trunca con aviso (D3).
+    ATTACHMENT_MAX_CHARS: int = Field(40_000, gt=0)
+    # Texto de adjuntos que ve el extractor de memoria (coste acotado).
+    METADATA_ATTACHMENT_CHARS: int = Field(12_000, ge=0)
+    # Ciclo de vida: inactiva → archivada (409); archivada → purgada.
+    SESSION_IDLE_ARCHIVE_HOURS: float = Field(24, gt=0)
+    SESSION_ARCHIVE_RETENTION_HOURS: float = Field(72, gt=0)
     # Tamaño descomprimido máximo de un DOCX (es un zip).
     ATTACHMENT_MAX_EXPANDED_BYTES: int = Field(50_000_000, gt=0)
     CONVERSATION_TTL_MINUTES: int = Field(60, gt=0)

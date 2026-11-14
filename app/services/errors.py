@@ -54,6 +54,17 @@ class SessionNotFoundError(ServiceError):
         super().__init__(f"No existe la sesión {session_id}. Crea una nueva con POST /sessions.")
 
 
+class SessionArchivedError(ServiceError):
+    status_code = 409
+    code = "session_archived"
+
+    def __init__(self, session_id: str, reason: str) -> None:
+        super().__init__(
+            f"La sesión {session_id} está archivada ({reason}). Abre otra con POST /sessions: "
+            "con inherit_memory=true conserva los hechos del proyecto; sin él, empieza de cero."
+        )
+
+
 class AttachmentRejectedError(ServiceError):
     status_code = 422
     code = "attachment_rejected"

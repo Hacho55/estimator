@@ -19,7 +19,7 @@ from app.services.errors import InputRejectedError
 
 log = structlog.get_logger(__name__)
 
-Policy = Literal["exception", "fix_retry", "filter"]
+Policy = Literal["exception", "fix_retry", "filter", "log"]
 
 INJECTION_PATTERNS = (
     re.compile(r"ignora(?:\s+las)?\s+instrucciones\s+anteriores", re.IGNORECASE),
@@ -52,6 +52,15 @@ PROMPT_INJECTION = Guardrail(
     name="prompt_injection",
     policy="exception",
     description="Patrones de inyección o etiquetas del prompt en la entrada.",
+)
+DYNAMIC_INJECTION = Guardrail(
+    name="dynamic_context_injection",
+    policy="log",
+    description=(
+        "Patrones de inyección en adjuntos o resultados de herramientas. Solo se registra: "
+        "ese texto va delimitado y declarado como dato, y rechazar un PDF del cliente por "
+        "una frase no ayuda al usuario."
+    ),
 )
 PII_INPUT = Guardrail(
     name="pii_input",
@@ -196,6 +205,20 @@ def guard_input(text: str) -> str:
     redacted, entities, engine = redact_pii(text)
     fired = bool(entities) or redacted != text
     _emit(PII_INPUT, mode=mode, fired=fired, entities=entities, engine=engine)
+    return redacted
+
+
+def guard_dynamic_text(text: str, *, source: str) -> str:
+    """Adjuntos y resultados de herramientas: se registra la inyección y se tacha la PII.
+
+    No lanza: el contenido externo es dato (regla 1 de la fase 1), no programa.
+    """
+    settings = get_settings()
+    mode = settings.GUARDRAILS_MODE
+    matched = detect_prompt_injection(text)
+    _emit(DYNAMIC_INJECTION, mode=mode, fired=bool(matched), pattern=matched, source=source)
+    redacted, entities, engine = redact_pii(text)
+    _emit(PII_INPUT, mode=mode, fired=bool(entities) or redacted != text, entities=entities, engine=engine, source=source)
     return redacted
 
 

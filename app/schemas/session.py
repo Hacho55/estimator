@@ -1,5 +1,6 @@
 """Contrato de la sesión: hechos del proyecto, aparte del historial."""
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -89,8 +90,41 @@ class MemoryChange(BaseModel):
     evidence: str | None = None
 
 
+class SessionCreateRequest(BaseModel):
+    """Cuerpo opcional de ``POST /sessions``: reset (archiva la anterior) y herencia de memoria."""
+
+    previous_session_id: str | None = None
+    inherit_memory: bool = False
+
+
 class SessionCreated(BaseModel):
     session_id: str
+    inherited_from: str | None = None
+
+
+class AttachmentInfo(BaseModel):
+    name: str
+    pages: int
+    chars: int
+    truncated: bool
+    ms: float
+
+
+class SessionState(BaseModel):
+    """Lo auditable de una sesión: memoria, cambios y ciclo de vida. No incluye el historial."""
+
+    session_id: str
+    status: Literal["active", "archived"]
+    archived_reason: str | None = None
+    inherited_from: str | None = None
+    turns: int
+    window_turns: int
+    tier: str | None = None
+    project_metadata: ProjectMetadata
+    memory_log: list[MemoryChange]
+    created_at: datetime
+    updated_at: datetime
+    archived_at: datetime | None = None
 
 
 class SessionEstimateResponse(BaseModel):
@@ -103,6 +137,7 @@ class SessionEstimateResponse(BaseModel):
     estimation: str | None = None  # Markdown de la vista del tier.
     estimation_structured: TierEstimate | None = None
     warnings: list[ValidationIssue]
+    attachments: list[AttachmentInfo] = Field(default_factory=list)
     model: str
     provider: str
     gateway: str = "litellm"

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import re
+import time
 import zipfile
+from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 
@@ -36,8 +38,27 @@ async def read_up_to(upload, limit: int) -> bytes:
     return b"".join(chunks)
 
 
-def extract_text(filename: str, data: bytes) -> str:
+@dataclass(frozen=True)
+class ExtractedAttachment:
+    """Texto de un adjunto y lo que costó obtenerlo (regla 3: latencia visible)."""
+
+    name: str
+    text: str
+    pages: int
+    chars: int  # Contenido del documento, sin marcas de página.
+    truncated: bool
+    ms: float
+
+    def reference(self) -> str:
+        """Lo que guarda el historial en lugar del texto (D2: un adjunto se paga una vez)."""
+        cut = ", truncado" if self.truncated else ""
+        return f"[adjunto: {self.name}, {self.chars} caracteres{cut}]"
+
+
+def extract_text(filename: str, data: bytes, *, max_chars: int | None = None) -> ExtractedAttachment:
+    """Extrae el texto. Si pasa de ``max_chars`` se trunca y se marca (D3), sin leer el resto."""
     settings = get_settings()
+    started = time.perf_counter()
     name = attachment_label(filename)
     suffix = Path(name).suffix.lower()
     if suffix not in ALLOWED_SUFFIXES:
@@ -48,59 +69,78 @@ def extract_text(filename: str, data: bytes) -> str:
         raise AttachmentTooLargeError(
             f"{name} supera el límite de {settings.ATTACHMENT_MAX_BYTES} bytes."
         )
+    limit = settings.ATTACHMENT_MAX_CHARS if max_chars is None else max_chars
+    budget = _TextBudget(limit)
     try:
-        text = _read(suffix, data, max_chars=settings.TRANSCRIPTION_MAX_CHARS)
+        pages = _read(suffix, data, budget)
     except (AttachmentRejectedError, AttachmentTooLargeError):
         raise
     except Exception as exc:  # noqa: BLE001
         raise AttachmentRejectedError(f"No se pudo leer {name}.") from exc
-    cleaned = text.strip()
-    if not cleaned:
-        raise AttachmentRejectedError(f"{name} no contiene texto extraíble.")
-    if len(cleaned) > settings.TRANSCRIPTION_MAX_CHARS:
-        raise AttachmentTooLargeError(f"El texto de {name} supera el largo máximo.")
-    return cleaned
-
-
-def join_attachments(transcript: str, extracted: list[tuple[str, str]]) -> str:
-    parts = [transcript.strip()]
-    for name, text in extracted:
-        parts.append(f"--- attachment: {name} ---\n{text}")
-    return "\n\n".join(part for part in parts if part)
+    text = budget.text().strip()
+    if budget.content == 0 and not budget.truncated:
+        # Un PDF escaneado o de solo imágenes: sin OCR (camino B) no hay nada que leer.
+        raise AttachmentRejectedError(f"{name} no contiene texto extraíble (¿es un escaneo?).")
+    return ExtractedAttachment(
+        name=name,
+        text=text,
+        pages=pages,
+        chars=budget.content,
+        truncated=budget.truncated,
+        ms=round((time.perf_counter() - started) * 1000, 2),
+    )
 
 
 class _TextBudget:
-    """Corta la extracción en cuanto el texto pasa del máximo, sin leer el resto."""
+    """Acumula texto hasta ``max_chars``. Al llenarse, marca ``truncated`` y deja de guardar."""
 
     def __init__(self, max_chars: int) -> None:
-        self.max_chars = max_chars
+        self.max_chars = max(0, max_chars)
         self.parts: list[str] = []
         self.size = 0
+        self.content = 0  # Caracteres del documento, sin las marcas que añade el sistema.
+        self.truncated = False
 
-    def add(self, text: str) -> None:
-        self.size += len(text) + 1
-        if self.size > self.max_chars:
-            raise AttachmentTooLargeError("El texto del adjunto supera el largo máximo.")
-        self.parts.append(text)
+    @property
+    def full(self) -> bool:
+        return self.truncated
+
+    def add(self, text: str, *, marker: str = "") -> None:
+        """Añade ``text``; ``marker`` (por ejemplo la página) no cuenta como contenido."""
+        if self.truncated:
+            return
+        whole = f"{marker}\n{text}" if marker else text
+        room = self.max_chars - self.size
+        piece = whole if len(whole) + 1 <= room else whole[: max(0, room - 1)]
+        if piece:
+            self.parts.append(piece)
+            self.size += len(piece) + 1
+            self.content += len(piece[len(marker) + 1 :].strip() if marker else piece.strip())
+        if piece != whole:
+            self.truncated = True
 
     def text(self) -> str:
         return "\n".join(self.parts)
 
 
-def _read(suffix: str, data: bytes, *, max_chars: int) -> str:
-    budget = _TextBudget(max_chars)
+def _read(suffix: str, data: bytes, budget: _TextBudget) -> int:
+    """Rellena ``budget`` y devuelve el número de páginas (PDF) o 0 (Word)."""
     if suffix == ".pdf":
         from pypdf import PdfReader
 
         reader = PdfReader(BytesIO(data))
-        for page in reader.pages:
-            budget.add(page.extract_text() or "")
-        return budget.text()
+        pages = len(reader.pages)
+        for number, page in enumerate(reader.pages, start=1):
+            if budget.full:
+                break  # Truncado: el resto del PDF no se extrae.
+            # Marca de página: el modelo puede citar de dónde sale cada dato.
+            budget.add(page.extract_text() or "", marker=f"--- página {number} ---")
+        return pages
     _require_bounded_docx(data)
     from docx import Document
 
     _walk_docx(Document(BytesIO(data)), budget)
-    return budget.text()
+    return 0
 
 
 def _require_bounded_docx(data: bytes) -> None:
@@ -117,10 +157,16 @@ def _walk_docx(container, budget: _TextBudget) -> None:
     from docx.table import Table
 
     for item in container.iter_inner_content():
+        if budget.full:
+            return  # Truncado: el resto del documento no se recorre.
         if isinstance(item, Table):
             for row in item.rows:
+                if budget.full:
+                    return
                 seen = set()
                 for cell in row.cells:
+                    if budget.full:
+                        return
                     # Las celdas combinadas se repiten en row.cells.
                     if id(cell._tc) in seen:
                         continue
