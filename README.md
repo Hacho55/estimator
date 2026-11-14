@@ -265,6 +265,23 @@ La memoria entra al final del system de `v4`, campo a campo y solo con lo que ti
 
 El contrato v1 admite campos nuevos opcionales. Renombrar, quitar o cambiar el tipo de un campo exige `/api/v2` con su propio router, mientras v1 sigue respondiendo. Los `operation_id` no se renombran.
 
+## Backend de negocio (demo)
+
+`business_backend/` es otro servicio, con su propia SQLite y sus reglas. Guarda los usuarios con su `tier` y el histórico de proyectos cerrados con sus horas reales. El estimador no lo importa ni abre su base de datos: le habla por HTTP con contrato.
+
+```bash
+uv run uvicorn business_backend.main:app --port 8100
+```
+
+| Ruta | Para qué |
+|---|---|
+| `GET /api/users` | Usuarios de demostración (uno por tier) |
+| `POST /api/auth/demo-login` | `{"user_id": "u-pm"}` → JWT para el estimador (`sub`, `tier`, `aud=estimador`, 15 min) |
+| `PATCH /api/me/tier` | El usuario cambia su perfil; devuelve un token nuevo |
+| `POST /api/internal/similar_projects` | Proyectos cerrados parecidos y sus métricas reales (desviación, riesgos materializados). Solo con `BUSINESS_INTERNAL_TOKEN` |
+
+Necesita `AI_SERVICE_SECRET` (el mismo que el estimador) y `BUSINESS_INTERNAL_TOKEN`, de al menos 32 caracteres. Con Docker, `docker compose up business-backend`. Es autenticación de demostración, sin contraseñas.
+
 ## Errores habituales
 
 | HTTP | `error` | Qué ha pasado | Qué cambiar |

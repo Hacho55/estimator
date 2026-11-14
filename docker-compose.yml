@@ -6,5 +6,25 @@ services:
     volumes:
       - redis_data:/data
 
+  # Backend de negocio simulado (sesión 5): usuarios con tier y proyectos cerrados.
+  # Otro servicio, con su BBDD; el estimador le habla por HTTP.
+  business-backend:
+    image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+    working_dir: /srv
+    command: uv run --frozen uvicorn business_backend.main:app --host 0.0.0.0 --port 8100
+    environment:
+      UV_PROJECT_ENVIRONMENT: /venv
+      BUSINESS_DB_PATH: /data/business.db
+      # Sin valor, BusinessSettings se niega a arrancar (secretos de 32 caracteres o más).
+      # Así `docker compose up redis` no exige estos secretos.
+      AI_SERVICE_SECRET: ${AI_SERVICE_SECRET:-}
+      BUSINESS_INTERNAL_TOKEN: ${BUSINESS_INTERNAL_TOKEN:-}
+    ports:
+      - "8100:8100"
+    volumes:
+      - .:/srv
+      - business_data:/data
+
 volumes:
   redis_data:
+  business_data:
