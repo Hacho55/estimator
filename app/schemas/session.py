@@ -6,6 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.estimation import UsageInfo, ValidationIssue
+from app.schemas.review import ReviewTrace
 from app.schemas.tiers import TierEstimate
 
 # Límites de la memoria. Un valor fuera de ellos es una extracción sospechosa.
@@ -138,6 +139,7 @@ class SessionEstimateResponse(BaseModel):
     estimation_structured: TierEstimate | None = None
     warnings: list[ValidationIssue]
     attachments: list[AttachmentInfo] = Field(default_factory=list)
+    review: ReviewTrace | None = None  # Actor-Critic-Boss: decisión, vueltas e issues abiertos.
     model: str
     provider: str
     gateway: str = "litellm"

@@ -323,6 +323,7 @@ def _response(
             AttachmentInfo(name=item.name, pages=item.pages, chars=item.chars, truncated=item.truncated, ms=item.ms)
             for item in attachments
         ],
+        review=result.review,
         model=result.model,
         provider=result.provider,
         prompt_version=result.prompt_version,

@@ -231,8 +231,8 @@ def test_view_redaction_covers_tier_only_fields() -> None:
 
 
 def test_cached_turn_is_reparsed_as_the_tier_draft(client, jwt_mode, tier_llm) -> None:
-    first = _estimate(client, "pm")
-    second = _estimate(client, "pm")  # Otra sesión, mismo primer turno: caché exacta.
+    first = _estimate(client, "developer")
+    second = _estimate(client, "developer")  # Otra sesión, mismo primer turno: caché exacta (sin revisión).
     assert second.json()["cache_hit"] is True
     assert second.json()["estimation_structured"] == first.json()["estimation_structured"]
 

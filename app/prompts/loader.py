@@ -73,7 +73,7 @@ def _require_version(version: str) -> None:
 _BLOCK_TAG = re.compile(
     r"<(/?)(project_description|user_message|attachments|attachment|tool_results|result|"
     r"project_metadata|critic_feedback|constraints|scope|reminder|"
-    r"current_memory|user_turn|assistant_turn)\b",
+    r"current_memory|user_turn|assistant_turn|transcript|estimation|tier|previous_turns)\b",
     re.IGNORECASE,
 )
 
@@ -175,3 +175,33 @@ def render_metadata_prompt(*, previous: str, user_turn: str, assistant_turn: str
 def render_repair(version: str = "v1", *, error: str) -> str:
     _require_version(version)
     return _env.get_template(f"estimation/{version}/repair.j2").render(error=error).strip()
+
+
+CRITIC_PROMPT_VERSION = "v1"
+
+
+def render_critic_prompt(
+    *,
+    tier: str,
+    transcript: str,
+    attachments: str,
+    memory: str,
+    estimation: str,
+    conversation: str = "",
+) -> tuple[str, str]:
+    """Prompt del crítico (fase 5): estructuralmente distinto del actor; auditor, no generador."""
+    folder = f"critic/{CRITIC_PROMPT_VERSION}"
+    system = _env.get_template(f"{folder}/system.j2").render().strip()
+    user = (
+        _env.get_template(f"{folder}/user.j2")
+        .render(
+            tier=tier,
+            transcript=as_data(transcript),
+            attachments=as_data(attachments),
+            memory=as_data(memory),
+            estimation=as_data(estimation),
+            conversation=as_data(conversation),
+        )
+        .strip()
+    )
+    return system, user

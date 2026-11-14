@@ -10,6 +10,7 @@ La implementación vive en app/observability.py.
 
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -17,6 +18,7 @@ from datetime import UTC, datetime
 from app.config import derive_provider, get_settings
 from app.context.preprocessing import build_context_block, get_context_block
 from app.evaluation.metrics import collect_metrics
+from app.evaluation.properties import Subject
 from app.observability import (
     current_trace_id,
     estimation_trace,
@@ -38,6 +40,7 @@ from app.schemas.estimation import (
     UsageInfo,
     ValidationIssue,
 )
+from app.schemas.review import ReviewTrace
 from app.services import llm_client
 from app.services.errors import (
     ContextBudgetExceededError,
@@ -45,6 +48,7 @@ from app.services.errors import (
     LLMOutputTruncatedError,
     LLMUnavailableError,
     PromptVersionError,
+    ServiceError,
 )
 from app.services.guardrails import guard_dynamic_text, guard_input, guard_output, redact_pii
 from app.services.postprocessor import (
@@ -67,6 +71,7 @@ from app.services.prompt_builder import (
     repair_instruction,
     system_text_of,
 )
+from app.services.review_loop import ESTIMATION_KINDS, run_review
 from app.services.tier_views import (
     build_view,
     corrected_draft,
@@ -144,6 +149,8 @@ class ContextOverrides:
     dynamic: DynamicContext | None = None  # Memoria, adjuntos, herramientas y crítico (v4).
     session_window: bool = False  # Sesión: recorta por pares viejos, sin anclas.
     tier: str | None = None  # Perfil del llamante (app/tiers.py). None: contrato clásico de v1/v2.
+    call_name: str = "generate-estimate"  # Nombre de la llamada en trazas (actor-2 en la revisión).
+    defer_cache: bool = False  # Con revisión, solo se cachea la salida final aceptada.
 
 
 @dataclass
@@ -173,6 +180,8 @@ class TurnResult:
     tier: str | None = None
     view: object | None = None  # Vista del tier para el cliente (app/schemas/tiers.py).
     attachments_used: list[dict] = field(default_factory=list)  # Adjuntos ya tachados que vio el modelo.
+    cache_key: str | None = None
+    review: ReviewTrace | None = None  # Auditoría Actor-Critic-Boss, si hubo revisión.
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     def to_estimation_response(self) -> EstimationResponse:
@@ -234,9 +243,24 @@ def _usage_from(result: llm_client.LLMResult) -> UsageInfo:
     )
 
 
-def _require_complete(result: llm_client.LLMResult) -> None:
+def _with_spend(error: ServiceError, usage: UsageInfo, cost: float | None, latency: float) -> ServiceError:
+    """Adjunta al error el gasto de las llamadas que sí respondieron."""
+    error.spent_usage = usage  # type: ignore[attr-defined]
+    error.spent_cost = cost  # type: ignore[attr-defined]
+    error.spent_ms = latency  # type: ignore[attr-defined]
+    return error
+
+
+def _require_complete(
+    result: llm_client.LLMResult,
+    *,
+    usage: UsageInfo | None = None,
+    cost: float | None = None,
+    latency: float = 0,
+) -> None:
     if result.finish_reason == "length":
-        raise LLMOutputTruncatedError()
+        error = LLMOutputTruncatedError()
+        raise _with_spend(error, usage, cost, latency) if usage is not None else error
 
 
 def _require_kind(turn, has_history: bool) -> None:
@@ -282,19 +306,185 @@ async def generate_estimation(
         f"cache:{overrides.prompt_cache or settings.LLM_PROMPT_CACHE}",
     ]
     # Observabilidad: abre la traza raíz. Sin claves, el bloque solo ejecuta _generate.
+    reviewed = _review_enabled(overrides)
+    if reviewed:
+        overrides = replace(overrides, defer_cache=True)
+        tags.append("review:acb")
     with estimation_trace(
         session_id,
         tags,
         {"model": model, "provider": provider},
         transcription=scrubbed,
     ):
-        return await _generate(
+        result = await _generate(
             scrubbed,
             conversation_history,
             overrides=overrides,
             model=model,
             provider=provider,
         )
+        if not reviewed:
+            return result
+        if _needs_review(result):
+            result = await _review(result, scrubbed, conversation_history, overrides, model, provider)
+        _store_final(result)
+        return result
+
+
+def _review_enabled(overrides: ContextOverrides) -> bool:
+    """D14: la revisión la declara el tier (app/tiers.py); ACB_ENABLED la apaga entera."""
+    config = _tier_config(overrides)
+    return bool(config and config.review == "acb" and get_settings().ACB_ENABLED)
+
+
+def _needs_review(result: TurnResult) -> bool:
+    """Solo estimaciones nuevas y estimables. Una respuesta (answer) o un acierto de caché no."""
+    estimable = result.estimation is not None and getattr(result.estimation, "is_estimable", False)
+    return result.kind in ESTIMATION_KINDS and estimable and not result.cache_hit and result.view is not None
+
+
+async def _review(
+    first: TurnResult,
+    scrubbed: str,
+    history: list[ChatMessage] | None,
+    overrides: ContextOverrides,
+    model: str,
+    provider: str,
+) -> TurnResult:
+    memory = overrides.dynamic.memory if overrides.dynamic else None
+    attachments = first.attachments_used
+
+    async def actor(feedback: list[dict], call: int) -> TurnResult:
+        dynamic = replace(overrides.dynamic or DynamicContext(), critic_feedback=feedback)
+        retry = replace(overrides, dynamic=dynamic, call_name=f"actor-{call}")
+        return await _generate(scrubbed, history, overrides=retry, model=model, provider=provider)
+
+    def subject_of(result: TurnResult) -> Subject:
+        return Subject(tier=result.tier or "", view=result.view, estimation=result.estimation, memory=memory)
+
+    outcome = await run_review(
+        first,
+        actor=actor,
+        subject_of=subject_of,
+        transcript=scrubbed,
+        attachments=attachments,
+        conversation=_conversation_excerpt(history),
+        max_actor_calls=get_settings().BOSS_MAX_ITERATIONS,
+    )
+    chosen: TurnResult = outcome.result  # type: ignore[assignment]
+    usage = first.usage
+    for extra in outcome.extra_usage:
+        usage = _sum_usage(usage, extra)
+    cost = None if first.cost_usd is None and outcome.extra_cost is None else (first.cost_usd or 0) + (outcome.extra_cost or 0)
+    warnings = [*chosen.warnings, *_review_warnings(outcome.trace)]
+    # La traza raíz muestra la salida que eligió el Boss, no la del último candidato.
+    set_trace_io(
+        input_text=scrubbed,
+        output_text=chosen.estimation_markdown or (chosen.message or ""),
+        metadata={
+            "review_decision": outcome.trace.decision,
+            "actor_calls": outcome.trace.actor_calls,
+            "open_issues": len(outcome.trace.open_issues),
+            "cost_usd": None if cost is None else round(cost, 6),
+        },
+    )
+    return replace(
+        chosen,
+        usage=usage,
+        cost_usd=cost,
+        latency_ms=first.latency_ms + outcome.extra_ms,
+        warnings=warnings,
+        review=outcome.trace,
+        # La clave es la del turno original: un actor posterior lleva el feedback en su clave.
+        cache_key=first.cache_key,
+    )
+
+
+CRITIC_CONTEXT_CHARS = 6_000
+
+
+USER_TURN_CHARS = 1_200
+ASSISTANT_TURN_CHARS = 500
+
+
+def _assistant_gist(content: str) -> str:
+    """De una estimación previa (JSON), lo que el crítico necesita: tipo, mensaje, título y resumen."""
+    try:
+        payload = json.loads(content)
+    except (ValueError, TypeError):
+        return content[:ASSISTANT_TURN_CHARS]
+    estimation = payload.get("estimation") or {}
+    parts = [payload.get("kind") or "", payload.get("message") or "", estimation.get("project_title") or "", estimation.get("summary") or ""]
+    return " · ".join(part for part in parts if part)[:ASSISTANT_TURN_CHARS]
+
+
+def _conversation_excerpt(history: list[ChatMessage] | None) -> str:
+    """Contexto previo para el crítico, por rol: las peticiones del usuario completas (acotadas)
+    y de cada estimación anterior solo su resumen, para que un JSON largo no las desplace."""
+    if not history:
+        return ""
+    lines: list[str] = []
+    for message in history:
+        if message.role == "user":
+            lines.append(f"[usuario] {message.content[:USER_TURN_CHARS]}")
+        else:
+            lines.append(f"[asistente] {_assistant_gist(message.content)}")
+    text = "\n".join(lines)
+    # Si aun así no cabe, se quedan los turnos más recientes enteros.
+    while len(text) > CRITIC_CONTEXT_CHARS and len(lines) > 1:
+        lines.pop(0)
+        text = "\n".join(lines)
+    return text[-CRITIC_CONTEXT_CHARS:]
+
+
+def _review_warnings(trace: ReviewTrace) -> list[ValidationIssue]:
+    """Lo que el Boss entrega abierto queda a la vista del usuario como aviso estructurado."""
+    warnings = [
+        ValidationIssue(
+            code=f"review_{issue.category.replace(':', '_')}",
+            severity="warning" if issue.blocking else "info",
+            message=issue.description,
+            field=issue.field_path,
+        )
+        for issue in trace.open_issues
+    ]
+    if any(not iteration.critic_ok for iteration in trace.iterations):
+        warnings.append(
+            ValidationIssue(
+                code="critic_unavailable",
+                severity="info",
+                message="El auditor no respondió; solo se aplicaron las comprobaciones deterministas.",
+            )
+        )
+    return warnings
+
+
+def _sum_usage(left: UsageInfo, right: UsageInfo) -> UsageInfo:
+    created = (left.cache_creation_tokens or 0) + (right.cache_creation_tokens or 0)
+    return UsageInfo(
+        input_tokens=left.input_tokens + right.input_tokens,
+        output_tokens=left.output_tokens + right.output_tokens,
+        total_tokens=left.total_tokens + right.total_tokens,
+        cached_tokens=left.cached_tokens + right.cached_tokens,
+        cache_creation_tokens=created or None,
+    )
+
+
+def _store_final(result: TurnResult) -> None:
+    """Con revisión, la caché exacta guarda la salida final bajo la clave del turno original.
+
+    Solo si se aceptó con el auditor disponible: una síntesis con issues abiertos o una
+    revisión incompleta no se sirve desde caché, porque sus avisos no viajan con ella.
+    """
+    estimable = result.estimation is not None and getattr(result.estimation, "is_estimable", False)
+    if result.cache_hit or not estimable or result.cache_key is None:
+        return
+    review = result.review
+    if review is not None and (
+        review.decision != "accept" or review.open_issues or not all(item.critic_ok for item in review.iterations)
+    ):
+        return
+    store(result.cache_key, content=result.history_content, model=result.model, finish_reason=result.finish_reason)
 
 
 @dataclass
@@ -325,6 +515,7 @@ class _Prepared:
     tier: str | None = None
     memory: dict | None = None  # Memoria de la sesión, para las propiedades online.
     attachments: list[dict] = field(default_factory=list)
+    defer_cache: bool = False
 
 
 def _routing_text(scrubbed: str, overrides: ContextOverrides) -> str:
@@ -515,6 +706,7 @@ def _prepare(
         tier=tier_config.tier.value if tier_config else None,
         memory=overrides.dynamic.memory if overrides.dynamic else None,
         attachments=list(overrides.dynamic.attachments) if overrides.dynamic else [],
+        defer_cache=overrides.defer_cache,
         metadata={"prompt_version": version, "examples": ",".join(block.included_ids)},
         key=key,
         cached=cached,
@@ -533,7 +725,9 @@ async def _apply_semantic_cache(prepared: _Prepared, *, model: str) -> _Prepared
     """Tras la caché exacta: mide o sirve un vecino semántico. Solo el primer turno."""
     settings = get_settings()
     mode = settings.SEMANTIC_CACHE_MODE
-    if mode == "off" or prepared.has_prior_turns or prepared.has_dynamic_context or prepared.cached is not None:
+    # Con revisión (defer_cache) tampoco: un vecino semántico se serviría sin pasar por el crítico.
+    skip = prepared.has_prior_turns or prepared.has_dynamic_context or prepared.defer_cache
+    if mode == "off" or skip or prepared.cached is not None:
         return prepared
     try:
         vector = await llm_client.embed(prepared.scrubbed_text)
@@ -690,7 +884,7 @@ async def _generate(
         first = await llm_client.complete(
             prepared.messages,
             prepared.response_format,
-            name="generate-estimate",
+            name=overrides.call_name,
             metadata=prepared.metadata,
             model=model,
             estimated_input_tokens=prepared.budget.total_input,
@@ -712,12 +906,12 @@ async def _assemble(first: llm_client.LLMResult, prepared: _Prepared, *, transcr
     cached = prepared.cached
     key = prepared.key
     dropped = prepared.dropped
-    _require_complete(first)
     repairs = 0
     answered = first
     usage = _usage_from(first)
     cost = first.cost_usd
     latency = first.latency_ms
+    _require_complete(first, usage=usage, cost=cost, latency=latency)
     parse = (lambda content: parse_tier_turn(content, prepared.tier)) if prepared.tier else parse_turn
     try:
         turn = parse(first.content)
@@ -738,13 +932,17 @@ async def _assemble(first: llm_client.LLMResult, prepared: _Prepared, *, transcr
             metadata=metadata,
             model=model,
         )
-        _require_complete(second)
-        turn = parse(second.content)
-        _require_kind(turn, prepared.has_prior_turns)
         usage = _add_usage(usage, second)
         latency += second.latency_ms
         if second.cost_usd is not None:
             cost = (cost or 0) + second.cost_usd
+        _require_complete(second, usage=usage, cost=cost, latency=latency)
+        try:
+            turn = parse(second.content)
+            _require_kind(turn, prepared.has_prior_turns)
+        except InvalidLLMOutputError as failed:
+            # El fallo lleva lo que costó: quien orquesta (la revisión) no debe perder esas llamadas.
+            raise _with_spend(failed, usage, cost, latency) from exc
         answered = second
 
     if turn.message:
@@ -783,7 +981,7 @@ async def _assemble(first: llm_client.LLMResult, prepared: _Prepared, *, transcr
 
     # Exacta y semántica solo tras validar y pasar guardrails; solo si es estimable.
     # Se guarda el turno ya postprocesado (mismo JSON que el historial), no el bruto del modelo.
-    if cached is None and estimation is not None and estimation.is_estimable:
+    if cached is None and estimation is not None and estimation.is_estimable and not prepared.defer_cache:
         store(key, content=history_content, model=answered.model, finish_reason=answered.finish_reason)
         if prepared.semantic_vector is not None and prepared.semantic_bucket is not None and not prepared.has_prior_turns:
             store_semantic(
@@ -827,6 +1025,7 @@ async def _assemble(first: llm_client.LLMResult, prepared: _Prepared, *, transcr
         tier=prepared.tier,
         view=view,
         attachments_used=prepared.attachments,
+        cache_key=key,
     )
     # Observabilidad: la estimación ya está en result. Esto solo puntúa y registra.
     scores = collect_metrics(

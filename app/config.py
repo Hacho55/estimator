@@ -66,6 +66,10 @@ class Settings(BaseSettings):
     SESSION_MAX_TURNS: int = Field(6, gt=0)
     # Extractor de memoria: modelo barato. Vacío = LLM_MODEL.
     METADATA_MODEL: str = ""
+    # Revisión Actor-Critic-Boss (fase 5). Se activa por tier en app/tiers.py; esto la apaga entera.
+    ACB_ENABLED: bool = True
+    CRITIC_MODEL: str = ""  # Vacío = LLM_MODEL. Mejor otra familia que el actor.
+    BOSS_MAX_ITERATIONS: int = Field(2, ge=1, le=3)  # Llamadas al actor como máximo.
     # Tiers: el perfil llega en un JWT del backend de negocio (jwt) o es fijo (off).
     AUTH_MODE: Literal["jwt", "off"] = "off"
     DEFAULT_TIER: Literal["developer", "pm", "executive"] = "developer"

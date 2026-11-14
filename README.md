@@ -118,6 +118,9 @@ Cada cambio en `.env` exige reiniciar uvicorn. La configuración se lee una vez 
 | `SESSION_IDLE_ARCHIVE_HOURS` | no | `24` | horas | Sin actividad, la sesión se archiva: no admite turnos (409) |
 | `SESSION_ARCHIVE_RETENTION_HOURS` | no | `72` | horas | Una sesión archivada se purga pasado este tiempo |
 | `METADATA_MODEL` | no | vacío (`LLM_MODEL`) | id de LiteLLM | Modelo del extractor de memoria de `/sessions` |
+| `ACB_ENABLED` | no | `true` | `true`, `false` | Interruptor global de la revisión Actor-Critic-Boss (se activa por tier) |
+| `CRITIC_MODEL` | no | vacío (`LLM_MODEL`) | id de LiteLLM | Modelo del crítico; mejor de otra familia que el actor |
+| `BOSS_MAX_ITERATIONS` | no | `2` | 1-3 | Llamadas al actor como máximo por turno revisado |
 | `AUTH_MODE` | no | `off` | `jwt`, `off` | Cómo llega el tier: JWT del backend de negocio o `DEFAULT_TIER` fijo. Nunca del cuerpo |
 | `DEFAULT_TIER` | no | `developer` | `developer`, `pm`, `executive` | Tier con `AUTH_MODE=off` |
 | `AI_SERVICE_SECRET` | con `jwt` | vacío | ≥ 32 caracteres | Secreto HS256 compartido con `business_backend` |
@@ -217,6 +220,16 @@ curl -s -X POST localhost:8000/sessions -H "Authorization: Bearer $TOKEN"
 ```bash
 curl -s -X POST "localhost:8000/sessions/$SESSION_ID/estimate" -H "Authorization: Bearer $TOKEN" -F transcript="$(cat data/transcripcion_reunion.md)" -F project_type=web_saas -F detail_level=medium
 ```
+
+### Revisión Actor-Critic-Boss
+
+En los tiers `pm` y `executive` (`review="acb"` en `app/tiers.py`), cada estimación nueva pasa por tres roles:
+
+- **Actor**: la llamada de siempre. Su salida es un candidato.
+- **Critic** (`app/services/critic.py`): primero las propiedades deterministas (sin LLM); después un auditor (`app/prompts/critic/v1/`, modelo `CRITIC_MODEL`) que devuelve issues estructurados: categoría, severidad y campo. No revisa aritmética: ya la corrige el código.
+- **Boss** (`app/services/boss.py`): código, no LLM. Acepta si no hay issues critical ni major; si los hay y queda presupuesto, el actor repite con `<critic_feedback>` en su mensaje; si el crítico rechaza o se agota `BOSS_MAX_ITERATIONS`, entrega el mejor candidato con los issues abiertos en `warnings`.
+
+La respuesta trae `review` (decisión, vueltas, llamadas al actor e issues abiertos). No se revisan respuestas (`answer`), turnos no estimables ni aciertos de caché, y solo se cachea la salida final. `developer` no tiene revisión: usuario experto, conversación tipo chat y latencia sensible.
 
 ### Almacén, ventana y olvido
 

@@ -1,0 +1,20 @@
+<tier>{{ tier }}</tier>
+<transcript>
+{{ transcript }}
+</transcript>
+{% if attachments %}
+<attachments>
+{{ attachments }}
+</attachments>
+{% endif %}
+{% if conversation %}
+<previous_turns>
+{{ conversation }}
+</previous_turns>
+{% endif %}
+<project_metadata>
+{{ memory }}
+</project_metadata>
+<estimation>
+{{ estimation }}
+</estimation>
