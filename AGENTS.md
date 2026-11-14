@@ -12,7 +12,8 @@ Material de enseñanza en `/Users/horaciosuarez/DEVS/AI-Eng/lidr-ai-engineering`
 - Texto del prompt: `app/prompts/estimation/<versión>/*.j2`. No se edita una carpeta ya publicada: una versión nueva es una carpeta nueva. Orden, segmentos y caché del prefijo: `app/services/prompt_builder.py`. Carga: `app/prompts/loader.py`.
 - Forma de los ejemplos dentro del prompt: `app/context/preprocessing.py`.
 - Datos de referencia, sin lógica ni formato: `app/context/examples.py`.
-- Llamada al modelo y embeddings: solo `app/services/llm_client.py` (`AsyncOpenAI` contra LiteLLM).
+- Llamada al modelo y embeddings: solo `app/services/llm_client.py` (`AsyncOpenAI` contra LiteLLM), también el *function calling* (`complete_with_tools`).
+- Herramientas: una por archivo en `app/tools/` (schema y ejecución; las llamadas HTTP a servicios externos van aquí, no al modelo). Cuándo se ofrecen: `app/services/tool_policy.py`. Bucle de investigación: `app/services/research.py`.
 - Validación de la estimación: `app/services/postprocessor.py`.
 - Guardrails (política declarada por control): `app/services/guardrails.py`.
 - Orquestación: `app/services/llm_service.py` (`generate_estimation`). No conoce HTTP.

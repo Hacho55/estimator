@@ -205,3 +205,14 @@ def render_critic_prompt(
         .strip()
     )
     return system, user
+
+
+RESEARCH_PROMPT_VERSION = "v1"
+
+
+def render_research_prompt(*, transcript: str, memory: str) -> tuple[str, str]:
+    """Prompt de la fase de investigación (herramientas). No es una versión de estimación."""
+    folder = f"research/{RESEARCH_PROMPT_VERSION}"
+    system = _env.get_template(f"{folder}/system.j2").render().strip()
+    user = _env.get_template(f"{folder}/user.j2").render(transcript=as_data(transcript), memory=as_data(memory)).strip()
+    return system, user

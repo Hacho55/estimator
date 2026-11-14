@@ -111,6 +111,13 @@ class AttachmentInfo(BaseModel):
     ms: float
 
 
+class ToolUse(BaseModel):
+    tool: str
+    ok: bool
+    ms: float
+    error: str | None = None
+
+
 class SessionState(BaseModel):
     """Lo auditable de una sesión: memoria, cambios y ciclo de vida. No incluye el historial."""
 
@@ -140,6 +147,7 @@ class SessionEstimateResponse(BaseModel):
     warnings: list[ValidationIssue]
     attachments: list[AttachmentInfo] = Field(default_factory=list)
     review: ReviewTrace | None = None  # Actor-Critic-Boss: decisión, vueltas e issues abiertos.
+    tools: list[ToolUse] = Field(default_factory=list)  # Herramientas de la fase de investigación.
     model: str
     provider: str
     gateway: str = "litellm"

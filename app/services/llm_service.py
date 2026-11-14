@@ -71,6 +71,7 @@ from app.services.prompt_builder import (
     repair_instruction,
     system_text_of,
 )
+from app.services.research import ResearchOutcome, run_research
 from app.services.review_loop import ESTIMATION_KINDS, run_review
 from app.services.tier_views import (
     build_view,
@@ -81,6 +82,7 @@ from app.services.tier_views import (
     to_estimation_draft,
 )
 from app.services.tier_views import history_content as tier_history_content
+from app.services.tool_policy import offered_tools
 from app.state.conversations import select_history
 from app.state.response_cache import CachedCompletion, cache_key, lookup, store
 from app.state.semantic_cache import (
@@ -182,6 +184,7 @@ class TurnResult:
     attachments_used: list[dict] = field(default_factory=list)  # Adjuntos ya tachados que vio el modelo.
     cache_key: str | None = None
     review: ReviewTrace | None = None  # Auditoría Actor-Critic-Boss, si hubo revisión.
+    tools: list[dict] = field(default_factory=list)  # Herramientas usadas: tool, ok, ms, error.
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     def to_estimation_response(self) -> EstimationResponse:
@@ -316,6 +319,10 @@ async def generate_estimation(
         {"model": model, "provider": provider},
         transcription=scrubbed,
     ):
+        research = await _research(scrubbed, conversation_history, overrides)
+        if research.results:
+            # Con resultados de herramientas el turno no se cachea: esos datos caducan.
+            overrides = _with_tool_results(overrides, research)
         result = await _generate(
             scrubbed,
             conversation_history,
@@ -323,12 +330,54 @@ async def generate_estimation(
             model=model,
             provider=provider,
         )
-        if not reviewed:
-            return result
-        if _needs_review(result):
+        if reviewed and _needs_review(result):
             result = await _review(result, scrubbed, conversation_history, overrides, model, provider)
-        _store_final(result)
+        result = _add_research(result, research)
+        if reviewed:
+            _store_final(result)
         return result
+
+
+RESEARCH_INPUT_CHARS = 8_000
+
+
+async def _research(scrubbed: str, history: list[ChatMessage] | None, overrides: ContextOverrides) -> ResearchOutcome:
+    """Fase de herramientas del tier (si la política ofrece alguna). Si falla, se estima sin ella."""
+    dynamic = overrides.dynamic or DynamicContext()
+    # La misma fuente para decidir y para investigar: transcripción y adjuntos ya tachados.
+    source = _routing_text(scrubbed, overrides)[:RESEARCH_INPUT_CHARS]
+    tools = offered_tools(
+        _tier_config(overrides),
+        transcript=source,
+        has_prior_turns=bool(history),
+        has_attachments=bool(dynamic.attachments),
+    )
+    if not tools:
+        return ResearchOutcome()
+    with traced_span("research") as span:
+        outcome = await run_research(tools=tools, transcript=source, memory=dynamic.memory)
+        _annotate(span, output={"offered": tools, "used": [item.tool for item in outcome.results]})
+    return outcome
+
+
+def _with_tool_results(overrides: ContextOverrides, research: ResearchOutcome) -> ContextOverrides:
+    tool_results = [item.as_context() for item in research.results]  # Ya pasaron su guardrail en research.py.
+    dynamic = replace(overrides.dynamic or DynamicContext(), tool_results=tool_results)
+    return replace(overrides, dynamic=dynamic, defer_cache=True)
+
+
+def _add_research(result: TurnResult, research: ResearchOutcome) -> TurnResult:
+    """La fase de herramientas suma su gasto y deja constancia de qué se usó."""
+    if not research.calls:
+        return result
+    usage = result.usage
+    for extra in research.usage:
+        usage = _sum_usage(usage, extra)
+    cost = result.cost_usd if research.cost_usd is None else (result.cost_usd or 0) + research.cost_usd
+    tools = [
+        {"tool": item.tool, "ok": item.ok, "ms": round(item.ms, 1), "error": item.error} for item in research.results
+    ]
+    return replace(result, usage=usage, cost_usd=cost, latency_ms=result.latency_ms + research.latency_ms, tools=tools)
 
 
 def _review_enabled(overrides: ContextOverrides) -> bool:
@@ -477,7 +526,7 @@ def _store_final(result: TurnResult) -> None:
     revisión incompleta no se sirve desde caché, porque sus avisos no viajan con ella.
     """
     estimable = result.estimation is not None and getattr(result.estimation, "is_estimable", False)
-    if result.cache_hit or not estimable or result.cache_key is None:
+    if result.cache_hit or not estimable or result.cache_key is None or result.tools:
         return
     review = result.review
     if review is not None and (

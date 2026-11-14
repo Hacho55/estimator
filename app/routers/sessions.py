@@ -324,6 +324,7 @@ def _response(
             for item in attachments
         ],
         review=result.review,
+        tools=result.tools,
         model=result.model,
         provider=result.provider,
         prompt_version=result.prompt_version,

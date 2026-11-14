@@ -420,12 +420,96 @@ async def complete(
     return result
 
 
+_PUBLIC_KEYS = {"role", "content", "tool_calls", "tool_call_id"}
+
+
 def _public_messages(messages: list[dict]) -> list[dict]:
-    """Quita claves internas (segments) antes de enviarlas al proveedor."""
+    """Quita claves internas (segments, kind) antes de enviarlas al proveedor.
+
+    Conserva ``tool_calls`` y ``tool_call_id``: los mensajes de un bucle de herramientas.
+    """
     cleaned = []
     for message in messages:
-        cleaned.append({key: value for key, value in message.items() if key in {"role", "content"}})
+        cleaned.append({key: value for key, value in message.items() if key in _PUBLIC_KEYS})
     return cleaned
+
+
+@dataclass
+class ToolCall:
+    id: str
+    name: str
+    arguments: str  # JSON tal como lo devuelve el modelo; lo valida quien ejecuta la herramienta.
+
+
+@dataclass
+class ToolTurn:
+    """Una vuelta del bucle de herramientas: lo que dijo el modelo y qué herramientas pidió."""
+
+    result: LLMResult
+    tool_calls: list[ToolCall]
+    assistant_message: dict  # Para devolverlo al modelo en la vuelta siguiente.
+
+
+async def complete_with_tools(
+    messages: list[dict],
+    tools: list[dict],
+    *,
+    name: str,
+    model: str | None = None,
+    max_tokens: int = 800,
+) -> ToolTurn:
+    """Llamada con *function calling* (fase 1, herramientas). Sin ``response_format``:
+    el modelo elige si pide herramientas o contesta. La estimación sigue en ``complete``."""
+    settings = get_settings()
+    chosen = model or settings.LLM_MODEL
+    log_llm_started(model=chosen, provider=derive_provider(chosen), tokens_in=None, cache_hit=False, attempt=1)
+    payload: dict = {
+        "model": chosen,
+        "messages": _public_messages(messages),
+        "tools": tools,
+        "tool_choice": "auto",
+        "temperature": settings.LLM_TEMPERATURE,
+        "max_tokens": max_tokens,
+    }
+    if settings.langfuse_enabled:
+        payload["name"] = name
+        payload["metadata"] = {}
+    started = time.perf_counter()
+    try:
+        raw = await client.chat.completions.with_raw_response.create(**payload)
+    except (APITimeoutError, APIConnectionError, APIError) as exc:
+        _log_fail(exc, chosen, attempt=1, latency_ms=(time.perf_counter() - started) * 1000)
+        raise _as_service_error(exc) from exc
+    latency_ms = (time.perf_counter() - started) * 1000
+    parsed = raw.parse()
+    choice = parsed.choices[0]
+    message = choice.message
+    input_tokens, output_tokens, total_tokens, cached, created = _usage_details(parsed.usage)
+    result = LLMResult(
+        content=message.content or "",
+        model=parsed.model or chosen,
+        finish_reason=choice.finish_reason,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=total_tokens,
+        cached_tokens=cached,
+        cache_creation_tokens=created,
+        cost_usd=_cost_from_header(raw.headers),
+        latency_ms=latency_ms,
+    )
+    _log_ok(result, fallback_used=False)
+    calls = [
+        ToolCall(id=call.id, name=call.function.name, arguments=call.function.arguments or "{}")
+        for call in (message.tool_calls or [])
+        if getattr(call, "function", None) is not None
+    ]
+    assistant = {"role": "assistant", "content": message.content or ""}
+    if calls:
+        assistant["tool_calls"] = [
+            {"id": call.id, "type": "function", "function": {"name": call.name, "arguments": call.arguments}}
+            for call in calls
+        ]
+    return ToolTurn(result=result, tool_calls=calls, assistant_message=assistant)
 
 
 async def embed(text: str, *, model: str | None = None) -> list[float]:

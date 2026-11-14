@@ -66,6 +66,17 @@ class Settings(BaseSettings):
     SESSION_MAX_TURNS: int = Field(6, gt=0)
     # Extractor de memoria: modelo barato. Vacío = LLM_MODEL.
     METADATA_MODEL: str = ""
+    # Herramientas (fase 1). Se ofrecen por tier (app/tiers.py); esto las apaga o las configura.
+    TOOLS_WEB_SEARCH: bool = True
+    TOOLS_SIMILAR_PROJECTS: bool = True
+    TAVILY_API_KEY: SecretStr = SecretStr("")
+    BUSINESS_BACKEND_URL: str = ""
+    BUSINESS_BACKEND_TOKEN: SecretStr = SecretStr("")  # = BUSINESS_INTERNAL_TOKEN del backend.
+    RESEARCH_MODEL: str = ""  # Vacío = LLM_MODEL.
+    TOOLS_MAX_ITERATIONS: int = Field(3, ge=1, le=5)  # Vueltas del bucle de herramientas.
+    TOOLS_MAX_CALLS: int = Field(4, ge=1, le=10)  # Invocaciones totales por turno.
+    TOOL_RESULT_MAX_CHARS: int = Field(3000, gt=0)
+    TOOL_TIMEOUT_SECONDS: float = Field(8, gt=0)
     # Revisión Actor-Critic-Boss (fase 5). Se activa por tier en app/tiers.py; esto la apaga entera.
     ACB_ENABLED: bool = True
     CRITIC_MODEL: str = ""  # Vacío = LLM_MODEL. Mejor otra familia que el actor.

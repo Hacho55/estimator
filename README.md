@@ -118,6 +118,12 @@ Cada cambio en `.env` exige reiniciar uvicorn. La configuración se lee una vez 
 | `SESSION_IDLE_ARCHIVE_HOURS` | no | `24` | horas | Sin actividad, la sesión se archiva: no admite turnos (409) |
 | `SESSION_ARCHIVE_RETENTION_HOURS` | no | `72` | horas | Una sesión archivada se purga pasado este tiempo |
 | `METADATA_MODEL` | no | vacío (`LLM_MODEL`) | id de LiteLLM | Modelo del extractor de memoria de `/sessions` |
+| `TAVILY_API_KEY` | no | vacío | clave de Tavily | Sin ella, `web_search` no se ofrece |
+| `BUSINESS_BACKEND_URL`, `BUSINESS_BACKEND_TOKEN` | no | vacío | URL y token de servicio | Sin ellos, `find_similar_projects` no se ofrece |
+| `TOOLS_WEB_SEARCH`, `TOOLS_SIMILAR_PROJECTS` | no | `true` | `true`, `false` | Interruptores globales de cada herramienta |
+| `TOOLS_MAX_ITERATIONS`, `TOOLS_MAX_CALLS` | no | `3`, `4` | enteros | Vueltas del bucle de herramientas e invocaciones por turno |
+| `TOOL_RESULT_MAX_CHARS`, `TOOL_TIMEOUT_SECONDS` | no | `3000`, `8` | — | Recorte de cada resultado y tiempo máximo por herramienta |
+| `RESEARCH_MODEL` | no | vacío (`LLM_MODEL`) | id de LiteLLM | Modelo de la fase de investigación |
 | `ACB_ENABLED` | no | `true` | `true`, `false` | Interruptor global de la revisión Actor-Critic-Boss (se activa por tier) |
 | `CRITIC_MODEL` | no | vacío (`LLM_MODEL`) | id de LiteLLM | Modelo del crítico; mejor de otra familia que el actor |
 | `BOSS_MAX_ITERATIONS` | no | `2` | 1-3 | Llamadas al actor como máximo por turno revisado |
@@ -220,6 +226,15 @@ curl -s -X POST localhost:8000/sessions -H "Authorization: Bearer $TOKEN"
 ```bash
 curl -s -X POST "localhost:8000/sessions/$SESSION_ID/estimate" -H "Authorization: Bearer $TOKEN" -F transcript="$(cat data/transcripcion_reunion.md)" -F project_type=web_saas -F detail_level=medium
 ```
+
+### Herramientas: búsqueda web y proyectos similares
+
+Antes de estimar puede haber una fase de investigación (`app/services/research.py`): un bucle de *function calling* en una llamada aparte, para no tocar el camino de la estimación. El modelo decide si usa alguna herramienta; el servicio la ejecuta y su resultado entra en `<tool_results>` del mensaje del actor, como dato.
+
+- `web_search` (`app/tools/web_search.py`): Tavily, solo para lo sensible al tiempo (versiones, precios, benchmarks).
+- `find_similar_projects` (`app/tools/similar_projects.py`): proyectos cerrados del backend de negocio, por HTTP y con token de servicio.
+
+Qué se ofrece lo decide `app/services/tool_policy.py`: lo que declara el tier (developer: las dos; pm y executive: proyectos similares), que esté configurado y que el turno dé motivos. Si no queda ninguna, no hay llamada ni latencia extra. Un fallo de herramienta es un resultado con `error`, no un 5xx. Con resultados de herramientas el turno no se cachea. La respuesta lista `tools` y cada invocación tiene su span `tool:<nombre>`.
 
 ### Revisión Actor-Critic-Boss
 
