@@ -1,47 +1,25 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { EstimationView } from "@/app/EstimationView";
+import { useEffect, useState } from "react";
+import { MemoryPanel } from "@/app/MemoryPanel";
+import { ReviewPanel } from "@/app/ReviewPanel";
+import { UserBar } from "@/app/UserBar";
+import { TierView } from "@/app/views/TierView";
+import type { Login } from "@/lib/auth";
+import { apiBase } from "@/lib/readEstimateStream";
 import {
-  apiBase,
-  type EstimatePayload,
-  type StructuredEstimation,
-} from "@/lib/readEstimateStream";
-import {
-  DETAIL_LEVEL_OPTIONS,
-  OUTPUT_FORMAT_OPTIONS,
-  PROJECT_TYPE_OPTIONS,
-  type DetailLevel,
-  type FormValues,
-  type OutputFormat,
-  type ProjectType,
-} from "@/lib/types";
+  ApiError,
+  EMPTY_METADATA,
+  createSession,
+  estimateTurn,
+  getSession,
+  type MemoryChange,
+  type ProjectMetadata,
+  type SessionEstimate,
+} from "@/lib/session";
+import { DETAIL_LEVEL_OPTIONS, PROJECT_TYPE_OPTIONS, type DetailLevel, type FormValues, type ProjectType } from "@/lib/types";
 
 type ContextView = { system: string; text: string; previewUnavailable: boolean };
-
-type ProjectMetadata = {
-  project_name: string | null;
-  assumed_team_size: number | null;
-  mentioned_technologies: string[];
-  agreed_scope: string | null;
-};
-
-type SessionEstimate = {
-  session_id: string;
-  project_metadata: ProjectMetadata;
-  kind: EstimatePayload["kind"];
-  message?: string | null;
-  estimation: string | null;
-  estimation_structured?: StructuredEstimation | null;
-  model: string;
-  provider: string;
-  prompt_version: string;
-  usage: { input_tokens: number; output_tokens: number };
-  latency_ms: number;
-  cache_hit: boolean;
-  cache_kind?: string | null;
-  cache_similarity?: number | null;
-};
 
 const EMPTY_FORM: FormValues = {
   description: "",
@@ -50,46 +28,18 @@ const EMPTY_FORM: FormValues = {
   output_format: "phases_table",
 };
 
-const EMPTY_METADATA: ProjectMetadata = {
-  project_name: null,
-  assumed_team_size: null,
-  mentioned_technologies: [],
-  agreed_scope: null,
-};
+const ACCEPT = ".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
 function plainContent(content: unknown): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
   return content
-    .map((block) => {
-      if (typeof block === "string") return block;
-      if (block && typeof block === "object" && "text" in block && typeof block.text === "string") return block.text;
-      return "";
-    })
+    .map((block) => (block && typeof block === "object" && "text" in block && typeof block.text === "string" ? block.text : ""))
     .filter(Boolean)
     .join("\n");
 }
 
-function toPayload(body: SessionEstimate): EstimatePayload {
-  return {
-    estimation: body.estimation,
-    model: body.model,
-    provider: body.provider,
-    input_tokens: body.usage.input_tokens,
-    output_tokens: body.usage.output_tokens,
-    latency_ms: body.latency_ms,
-    finish_reason: null,
-    cache_hit: body.cache_hit,
-    cache_kind: body.cache_kind,
-    cache_similarity: body.cache_similarity,
-    prompt_version: body.prompt_version,
-    conversation_id: body.session_id,
-    kind: body.kind,
-    message: body.message,
-    estimation_structured: body.estimation_structured,
-  };
-}
-
+// Prompt base: la plantilla genérica v4 sin tier, sin historial, memoria ni adjuntos.
 async function loadContext(form: FormValues, signal?: AbortSignal): Promise<ContextView> {
   const base = apiBase();
   const contextResponse = await fetch(`${base}/api/v1/context?include_text=true`, { signal });
@@ -98,7 +48,7 @@ async function loadContext(form: FormValues, signal?: AbortSignal): Promise<Cont
   let system = "";
   let previewUnavailable = false;
   if (form.description.trim().length >= 50) {
-    const previewResponse = await fetch(`${base}/api/v2/estimate/preview?prompt_version=v3`, {
+    const previewResponse = await fetch(`${base}/api/v2/estimate/preview?prompt_version=v4`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(form),
@@ -107,116 +57,95 @@ async function loadContext(form: FormValues, signal?: AbortSignal): Promise<Cont
     if (previewResponse.status === 404) previewUnavailable = true;
     else if (previewResponse.ok) {
       const preview = (await previewResponse.json()) as { messages?: { role: string; content: unknown }[] };
-      const message = preview.messages?.find((item) => item.role === "system");
-      system = plainContent(message?.content);
+      system = plainContent(preview.messages?.find((item) => item.role === "system")?.content);
     }
   }
   return { system, text: context.text ?? "", previewUnavailable };
 }
 
 export default function Page() {
+  const [auth, setAuth] = useState<Login | null>(null);
   const [form, setForm] = useState<FormValues>(EMPTY_FORM);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [metadata, setMetadata] = useState<ProjectMetadata>(EMPTY_METADATA);
+  const [memoryLog, setMemoryLog] = useState<MemoryChange[]>([]);
   const [files, setFiles] = useState<File[]>([]);
   const [fileKey, setFileKey] = useState(0);
   const [followUp, setFollowUp] = useState("");
-  const [estimate, setEstimate] = useState<EstimatePayload | null>(null);
-  const [structured, setStructured] = useState<StructuredEstimation | null>(null);
-  const [answer, setAnswer] = useState<string | null>(null);
-  const [chosenFormat, setChosenFormat] = useState<OutputFormat>("phases_table");
+  const [result, setResult] = useState<SessionEstimate | null>(null);
   const [error, setError] = useState("");
+  const [archived, setArchived] = useState(false);
   const [busy, setBusy] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
   const [context, setContext] = useState<ContextView | null>(null);
   const [contextError, setContextError] = useState("");
 
-  // Solo la última petición de sesión cuenta: una respuesta vieja no pisa el id activo.
-  const sessionRequest = useRef<AbortController | null>(null);
+  const token = auth?.token ?? null;
+  const userId = auth?.user.id ?? null;
 
-  async function openSession() {
-    sessionRequest.current?.abort();
-    const controller = new AbortController();
-    sessionRequest.current = controller;
-    try {
-      const response = await fetch(`${apiBase()}/sessions`, { method: "POST", signal: controller.signal });
-      if (!response.ok) throw new Error("session");
-      const body = (await response.json()) as { session_id: string };
-      if (sessionRequest.current !== controller) return;
-      setSessionId(body.session_id);
-      setMetadata(EMPTY_METADATA);
-    } catch (sessionError) {
-      if (controller.signal.aborted || sessionRequest.current !== controller) return;
-      throw sessionError;
-    }
-  }
-
+  // Otra persona, otra sesión: cada sesión pertenece al usuario del token que la creó.
   useEffect(() => {
-    openSession().catch(() => setError("No se pudo abrir la sesión."));
-    return () => {
-      sessionRequest.current?.abort();
-      sessionRequest.current = null;
-    };
-  }, []);
-
-  async function resetToForm() {
+    clearConversation();
     setSessionId(null);
+  }, [userId]);
+
+  function clearConversation() {
     setFollowUp("");
     setFiles([]);
-    setEstimate(null);
-    setStructured(null);
-    setAnswer(null);
+    setResult(null);
     setError("");
-    setContextOpen(false);
-    setForm(EMPTY_FORM);
+    setArchived(false);
+    setMetadata(EMPTY_METADATA);
+    setMemoryLog([]);
     setFileKey((current) => current + 1);
-    try {
-      await openSession();
-    } catch {
-      setError("No se pudo abrir la sesión.");
-    }
   }
 
-  function applyEstimate(payload: EstimatePayload, format: OutputFormat) {
-    setEstimate(payload);
-    if (payload.kind === "answer") {
-      setAnswer(payload.message ?? "Sin respuesta.");
-      return;
-    }
-    setAnswer(null);
-    if (payload.estimation_structured) {
-      setStructured(payload.estimation_structured);
-      setChosenFormat(format);
+  // Reset (política 3) o reanudar con la memoria heredada (política 2): la anterior queda archivada.
+  async function restart(inheritMemory: boolean) {
+    const previous = sessionId;
+    clearConversation();
+    setForm(EMPTY_FORM);
+    setSessionId(null);
+    if (!previous) return;
+    try {
+      const created = await createSession(token, { previousSessionId: previous, inheritMemory });
+      setSessionId(created.session_id);
+      if (inheritMemory) {
+        const state = await getSession(token, created.session_id);
+        setMetadata(state.project_metadata);
+        setMemoryLog(state.memory_log);
+      }
+    } catch {
+      setError("No se pudo abrir la sesión nueva.");
     }
   }
 
   async function postEstimate(transcript: string): Promise<boolean> {
-    if (!sessionId) {
-      setError("No hay sesión. Recarga la página.");
-      return false;
-    }
     setBusy(true);
     setError("");
-    const body = new FormData();
-    body.set("transcript", transcript);
-    body.set("project_type", form.project_type);
-    body.set("detail_level", form.detail_level);
-    body.set("output_format", form.output_format);
-    for (const file of files) body.append("attachments", file);
     try {
-      const response = await fetch(`${apiBase()}/sessions/${sessionId}/estimate`, { method: "POST", body });
-      const payload = (await response.json()) as SessionEstimate & { detail?: string };
-      if (!response.ok) {
-        setError(payload.detail || "La estimación no se pudo generar.");
-        return false;
+      let id = sessionId;
+      if (!id) {
+        id = (await createSession(token)).session_id;
+        setSessionId(id);
       }
+      const body = new FormData();
+      body.set("transcript", transcript);
+      body.set("project_type", form.project_type);
+      body.set("detail_level", form.detail_level);
+      for (const file of files) body.append("attachments", file);
+      const payload = await estimateTurn(token, id, body);
+      setResult(payload);
       setMetadata(payload.project_metadata);
       setFiles([]);
       setFileKey((current) => current + 1);
-      applyEstimate(toPayload(payload), form.output_format);
+      getSession(token, id)
+        .then((state) => setMemoryLog(state.memory_log))
+        .catch(() => setMemoryLog((current) => [...current, ...payload.memory_changes]));
       return true;
-    } catch {
-      setError("No se pudo conectar con la API en el puerto 8000.");
+    } catch (failure) {
+      if (failure instanceof ApiError && failure.code === "session_archived") setArchived(true);
+      setError(failure instanceof Error ? failure.message : "No se pudo conectar con la API en el puerto 8000.");
       return false;
     } finally {
       setBusy(false);
@@ -225,20 +154,17 @@ export default function Page() {
 
   async function onGenerate(event: React.FormEvent) {
     event.preventDefault();
-    if (form.description.trim().length < 50) {
-      setError("La descripción necesita al menos 50 caracteres.");
+    if (form.description.trim().length < 50 && files.length === 0) {
+      setError("La descripción necesita al menos 50 caracteres o un adjunto.");
       return;
     }
-    setChosenFormat(form.output_format);
     await postEstimate(form.description.trim());
   }
 
   async function onFollowUp(event: React.FormEvent) {
     event.preventDefault();
-    if (!followUp.trim()) return;
-    const message = followUp.trim();
-    const ok = await postEstimate(message);
-    if (ok) setFollowUp("");
+    if (!followUp.trim() && files.length === 0) return;
+    if (await postEstimate(followUp.trim())) setFollowUp("");
   }
 
   useEffect(() => {
@@ -247,11 +173,9 @@ export default function Page() {
     setContextError("");
     const timer = window.setTimeout(() => {
       loadContext(form, controller.signal)
-        .then((value) => setContext(value))
-        .catch((loadError: unknown) => {
-          if (controller.signal.aborted) return;
-          setContextError("No se pudo leer el contexto.");
-          void loadError;
+        .then(setContext)
+        .catch(() => {
+          if (!controller.signal.aborted) setContextError("No se pudo leer el contexto.");
         });
     }, 300);
     return () => {
@@ -260,12 +184,20 @@ export default function Page() {
     };
   }, [contextOpen, form]);
 
-  function promptText(): string {
-    if (context?.previewUnavailable) return "La vista previa del prompt solo está disponible en development.";
-    return context?.system || "Hace falta una descripción de al menos 50 caracteres para armar el prompt.";
-  }
-
-  const inConversation = Boolean(sessionId && (structured || answer || estimate));
+  const inConversation = Boolean(sessionId && result);
+  const fileInput = (label: string) => (
+    <label>
+      {label}
+      <input
+        key={`${label}-${fileKey}`}
+        type="file"
+        multiple
+        accept={ACCEPT}
+        aria-label={label}
+        onChange={(event) => setFiles(Array.from(event.target.files ?? []))}
+      />
+    </label>
+  );
 
   return (
     <main>
@@ -273,10 +205,11 @@ export default function Page() {
         <p className="mark">Estimador</p>
         <h1>{inConversation ? "Estimación" : "Nueva estimación"}</h1>
       </header>
+      <UserBar auth={auth} onAuth={setAuth} />
       <p className="lede">
         {inConversation
-          ? "Ajusta o pregunta sobre la estimación. Los hechos del proyecto se actualizan en el panel."
-          : "Rellena el formulario y, si hace falta, adjunta PDF o Word. El backend arma el prompt."}
+          ? "Ajusta o pregunta sobre la estimación. La memoria del proyecto se actualiza en el panel."
+          : "Describe el proyecto y, si hace falta, adjunta PDF o Word. La forma de la respuesta depende de tu perfil."}
       </p>
 
       <div className="workspace">
@@ -292,26 +225,14 @@ export default function Page() {
                   aria-label="Descripción del proyecto"
                 />
               </label>
-              <label>
-                Adjuntos
-                <input
-                  key={fileKey}
-                  type="file"
-                  multiple
-                  accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                  aria-label="Adjuntos"
-                  onChange={(event) => setFiles(Array.from(event.target.files ?? []))}
-                />
-              </label>
+              {fileInput("Adjuntos")}
               {files.length ? <p className="meta">{files.map((file) => file.name).join(", ")}</p> : null}
               <div className="field-row">
                 <label>
                   Tipo de proyecto
                   <select
                     value={form.project_type}
-                    onChange={(event) =>
-                      setForm((current) => ({ ...current, project_type: event.target.value as ProjectType }))
-                    }
+                    onChange={(event) => setForm((current) => ({ ...current, project_type: event.target.value as ProjectType }))}
                   >
                     {PROJECT_TYPE_OPTIONS.map((option) => (
                       <option key={option.value} value={option.value}>
@@ -321,12 +242,10 @@ export default function Page() {
                   </select>
                 </label>
                 <label>
-                  Nivel de detalle
+                  Profundidad
                   <select
                     value={form.detail_level}
-                    onChange={(event) =>
-                      setForm((current) => ({ ...current, detail_level: event.target.value as DetailLevel }))
-                    }
+                    onChange={(event) => setForm((current) => ({ ...current, detail_level: event.target.value as DetailLevel }))}
                   >
                     {DETAIL_LEVEL_OPTIONS.map((option) => (
                       <option key={option.value} value={option.value}>
@@ -335,28 +254,10 @@ export default function Page() {
                     ))}
                   </select>
                 </label>
-                <label>
-                  Formato de salida
-                  <select
-                    value={form.output_format}
-                    onChange={(event) =>
-                      setForm((current) => ({ ...current, output_format: event.target.value as OutputFormat }))
-                    }
-                  >
-                    {OUTPUT_FORMAT_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
               </div>
               <div className="actions">
-                <button type="submit" disabled={busy || !sessionId}>
+                <button type="submit" disabled={busy}>
                   {busy ? "Generando" : "Generar estimación"}
-                </button>
-                <button type="button" className="ghost" onClick={resetToForm} disabled={busy}>
-                  Nueva conversación
                 </button>
                 <button type="button" className="ghost" onClick={() => setContextOpen((open) => !open)}>
                   {contextOpen ? "Ocultar prompt base" : "Ver prompt base"}
@@ -365,8 +266,11 @@ export default function Page() {
             </form>
           ) : (
             <div className="actions sticky-actions">
-              <button type="button" className="ghost" onClick={resetToForm} disabled={busy}>
-                Nueva conversación
+              <button type="button" className="ghost" onClick={() => restart(false)} disabled={busy}>
+                Empezar de cero
+              </button>
+              <button type="button" className="ghost" onClick={() => restart(true)} disabled={busy}>
+                Nueva con lo aprendido
               </button>
               <button type="button" className="ghost" onClick={() => setContextOpen((open) => !open)}>
                 {contextOpen ? "Ocultar prompt base" : "Ver prompt base"}
@@ -375,68 +279,100 @@ export default function Page() {
           )}
 
           {error ? (
-            <p className="error" role="alert">
-              {error}
-            </p>
+            <div className="error" role="alert">
+              <p>{error}</p>
+              {archived ? (
+                <div className="actions">
+                  <button type="button" onClick={() => restart(true)}>
+                    Seguir con la memoria
+                  </button>
+                  <button type="button" className="ghost" onClick={() => restart(false)}>
+                    Empezar de cero
+                  </button>
+                </div>
+              ) : null}
+            </div>
           ) : null}
 
           {contextOpen ? (
             <section className="context">
               {contextError ? <p className="error">{contextError}</p> : null}
-              <p className="meta">
-                Prompt base v3, sin historial, metadatos ni adjuntos de la sesión · {form.project_type} ·{" "}
-                {form.detail_level} · {form.output_format}
-              </p>
+              <p className="meta">Plantilla genérica v4, sin tier, historial, memoria ni adjuntos.</p>
               <h2>System prompt base</h2>
-              <pre>{promptText()}</pre>
+              <pre>
+                {context?.previewUnavailable
+                  ? "La vista previa del prompt solo está disponible en development."
+                  : context?.system || "Hace falta una descripción de al menos 50 caracteres para armar el prompt."}
+              </pre>
               <h2>Contexto inyectado</h2>
               <pre>{context?.text || "Cargando el contexto."}</pre>
             </section>
           ) : null}
 
-          {estimate ? (
+          {result ? (
             <dl className="stats">
               <div>
+                <dt>Perfil</dt>
+                <dd>{result.tier ?? "—"}</dd>
+              </div>
+              <div>
                 <dt>Modelo</dt>
-                <dd>{estimate.model}</dd>
+                <dd>{result.model}</dd>
               </div>
               <div>
-                <dt>Tokens de entrada</dt>
-                <dd>{estimate.input_tokens}</dd>
-              </div>
-              <div>
-                <dt>Tokens de salida</dt>
-                <dd>{estimate.output_tokens}</dd>
-              </div>
-              <div>
-                <dt>Latencia</dt>
-                <dd>{Math.round(estimate.latency_ms)} ms</dd>
-              </div>
-              <div>
-                <dt>Origen</dt>
+                <dt>Tokens</dt>
                 <dd>
-                  {estimate.cache_hit
-                    ? estimate.cache_kind === "semantic"
-                      ? `caché semántica${estimate.cache_similarity != null ? ` (${estimate.cache_similarity.toFixed(2)})` : ""}`
-                      : "caché exacta"
-                    : "modelo"}
+                  {result.usage.input_tokens} / {result.usage.output_tokens}
                 </dd>
               </div>
               <div>
-                <dt>Prompt</dt>
-                <dd>{estimate.prompt_version}</dd>
+                <dt>Latencia</dt>
+                <dd>{Math.round(result.latency_ms)} ms</dd>
               </div>
+              <div>
+                <dt>Origen</dt>
+                <dd>{result.cache_hit ? `caché ${result.cache_kind === "semantic" ? "semántica" : "exacta"}` : "modelo"}</dd>
+              </div>
+              <div>
+                <dt>Prompt</dt>
+                <dd>{result.prompt_version}</dd>
+              </div>
+              {result.tools.length ? (
+                <div>
+                  <dt>Herramientas</dt>
+                  <dd>{result.tools.map((tool) => `${tool.tool}${tool.ok ? "" : " (falló)"}`).join(", ")}</dd>
+                </div>
+              ) : null}
+              {result.attachments.length ? (
+                <div>
+                  <dt>Adjuntos</dt>
+                  <dd>
+                    {result.attachments
+                      .map((item) => `${item.name} (${item.chars} car.${item.truncated ? ", truncado" : ""})`)
+                      .join(", ")}
+                  </dd>
+                </div>
+              ) : null}
             </dl>
           ) : null}
 
+          {result?.warnings.length ? (
+            <ul className="warnings">
+              {result.warnings.map((warning, index) => (
+                <li key={`${warning.code}-${index}`}>{warning.message}</li>
+              ))}
+            </ul>
+          ) : null}
+
           <div aria-live="polite" aria-busy={busy}>
-            {answer ? (
+            {result?.kind === "answer" ? (
               <article className="answer">
                 <h2>Respuesta</h2>
-                <p>{answer}</p>
+                <p>{result.message}</p>
               </article>
             ) : null}
-            {structured ? <EstimationView estimation={structured} format={chosenFormat} /> : null}
+            {result?.review ? <ReviewPanel review={result.review} /> : null}
+            {result?.estimation_structured ? <TierView view={result.estimation_structured} /> : null}
           </div>
 
           {inConversation ? (
@@ -450,46 +386,15 @@ export default function Page() {
                   rows={3}
                 />
               </label>
-              <label>
-                Adjuntos
-                <input
-                  key={`follow-${fileKey}`}
-                  type="file"
-                  multiple
-                  accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                  aria-label="Adjuntos del ajuste"
-                  onChange={(event) => setFiles(Array.from(event.target.files ?? []))}
-                />
-              </label>
-              <button type="submit" disabled={busy || !followUp.trim()}>
+              {fileInput("Adjuntos del ajuste")}
+              <button type="submit" disabled={busy || (!followUp.trim() && files.length === 0)}>
                 {busy ? "Enviando" : "Enviar"}
               </button>
             </form>
           ) : null}
         </div>
 
-        <aside className="metadata" aria-label="project_metadata">
-          <h2>project_metadata</h2>
-          <p className="meta">{sessionId ? `sesión ${sessionId}` : "abriendo sesión"}</p>
-          <dl>
-            <div>
-              <dt>Nombre</dt>
-              <dd>{metadata.project_name || "—"}</dd>
-            </div>
-            <div>
-              <dt>Equipo asumido</dt>
-              <dd>{metadata.assumed_team_size ?? "—"}</dd>
-            </div>
-            <div>
-              <dt>Tecnologías</dt>
-              <dd>{metadata.mentioned_technologies.length ? metadata.mentioned_technologies.join(", ") : "—"}</dd>
-            </div>
-            <div>
-              <dt>Alcance acordado</dt>
-              <dd>{metadata.agreed_scope || "—"}</dd>
-            </div>
-          </dl>
-        </aside>
+        <MemoryPanel sessionId={sessionId} metadata={metadata} log={memoryLog} tier={result?.tier ?? auth?.user.tier ?? null} />
       </div>
     </main>
   );
