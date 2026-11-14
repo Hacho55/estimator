@@ -5,6 +5,7 @@ record_scores, y el script de experimentos las guarda en el informe local.
 """
 
 from app.context.examples import RATE_CARD
+from app.evaluation.properties import Subject, run_properties
 from app.schemas.estimation import Estimation, UsageInfo, ValidationIssue
 
 
@@ -17,6 +18,9 @@ def collect_metrics(
     cost_usd: float | None,
     latency_ms: float,
     expected: dict | None = None,
+    view=None,
+    tier: str | None = None,
+    memory: dict | None = None,
 ) -> dict[str, float]:
     scores: dict[str, float] = {
         "json_valid_first_try": 1.0 if first_try else 0.0,
@@ -31,6 +35,11 @@ def collect_metrics(
         scores["cached_ratio"] = usage.cached_tokens / usage.input_tokens
     if cost_usd is not None:
         scores["cost_usd"] = cost_usd
+    if view is not None and tier:
+        # Las mismas propiedades que la suite de evals, como puntuación online (0 o 1).
+        subject = Subject(tier=tier, view=view, estimation=estimation, memory=memory)
+        for result in run_properties(subject):
+            scores[f"prop_{result.name}"] = 1.0 if result.passed else 0.0
     if estimation is None:
         return scores
 

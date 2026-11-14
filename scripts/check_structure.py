@@ -80,6 +80,7 @@ REQUIRED = [
     "docker-compose.yml",
     "app/evaluation/__init__.py",
     "app/evaluation/metrics.py",
+    "app/evaluation/properties.py",
     ".env.example",
     ".gitignore",
     "pyproject.toml",

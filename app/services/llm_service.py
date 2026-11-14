@@ -322,6 +322,7 @@ class _Prepared:
     # Hay contexto dinámico (memoria, adjuntos, herramientas): la caché semántica no aplica.
     has_dynamic_context: bool = False
     tier: str | None = None
+    memory: dict | None = None  # Memoria de la sesión, para las propiedades online.
 
 
 def _redact_text(text: str) -> str:
@@ -488,6 +489,7 @@ def _prepare(
             else build_response_format()
         ),
         tier=tier_config.tier.value if tier_config else None,
+        memory=overrides.dynamic.memory if overrides.dynamic else None,
         metadata={"prompt_version": version, "examples": ",".join(block.included_ids)},
         key=key,
         cached=cached,
@@ -806,6 +808,9 @@ async def _assemble(first: llm_client.LLMResult, prepared: _Prepared, *, transcr
         usage=usage,
         cost_usd=cost,
         latency_ms=latency,
+        view=view,
+        tier=prepared.tier,
+        memory=prepared.memory,
     )
     record_scores(scores)
     set_trace_io(
