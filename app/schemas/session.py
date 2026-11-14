@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.estimation import Estimation, UsageInfo, ValidationIssue
 
@@ -26,6 +26,23 @@ class ProjectMetadata(BaseModel):
         if self.is_empty():
             return ""
         return self.model_dump_json()
+
+
+class ExtractedMetadata(BaseModel):
+    """Salida de la llamada de metadatos: las cuatro claves y nada más.
+
+    Un `{}` o un JSON con otra forma no es una extracción válida y no borra los hechos.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    project_name: str | None
+    assumed_team_size: int | None
+    mentioned_technologies: list[str]
+    agreed_scope: str | None
+
+    def to_metadata(self) -> ProjectMetadata:
+        return ProjectMetadata(**self.model_dump())
 
 
 class SessionCreated(BaseModel):

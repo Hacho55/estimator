@@ -244,3 +244,112 @@ def test_too_many_attachments_is_422(client, monkeypatch) -> None:
     )
     assert response.status_code == 422
     assert response.json()["error"] == "attachment_rejected"
+
+
+def _metadata_json(**fields) -> str:
+    payload = {"project_name": None, "assumed_team_size": None, "mentioned_technologies": [], "agreed_scope": None}
+    payload.update(fields)
+    return json.dumps(payload)
+
+
+def test_empty_metadata_json_keeps_previous_facts(client, monkeypatch) -> None:
+    replies = iter([_metadata_json(project_name="Portal Atlas", assumed_team_size=3), "{}"])
+
+    async def complete(messages, response_format, *, name, metadata=None, model=None, estimated_input_tokens=None):
+        if name == "extract-metadata":
+            return _result(next(replies))
+        return _result(estimation_turn())
+
+    _install(monkeypatch, complete)
+    session_id = client.post("/sessions").json()["session_id"]
+    first = client.post(f"/sessions/{session_id}/estimate", data={"transcript": TRANSCRIPT, **FORM})
+    assert first.json()["project_metadata"]["project_name"] == "Portal Atlas"
+    second = client.post(f"/sessions/{session_id}/estimate", data={"transcript": "Baja las horas de QA.", **FORM})
+    assert second.status_code == 200
+    assert second.json()["project_metadata"]["project_name"] == "Portal Atlas"
+    assert second.json()["project_metadata"]["assumed_team_size"] == 3
+
+
+def test_answer_is_valid_after_the_window_drops_every_pair(client, monkeypatch) -> None:
+    turns: list[str] = []
+
+    async def complete(messages, response_format, *, name, metadata=None, model=None, estimated_input_tokens=None):
+        if name == "extract-metadata":
+            return _result(_metadata_json(assumed_team_size=4))
+        turns.append(name)
+        if len(turns) == 1:
+            return _result(estimation_turn())
+        assert not any(message["role"] == "assistant" for message in messages), "el recorte debía vaciar el historial"
+        return _result(json.dumps({"kind": "answer", "message": "Son cuatro personas.", "estimation": None}))
+
+    _install(monkeypatch, complete)
+    session_id = client.post("/sessions").json()["session_id"]
+    assert client.post(f"/sessions/{session_id}/estimate", data={"transcript": TRANSCRIPT, **FORM}).status_code == 200
+
+    monkeypatch.setattr("app.services.llm_service.slide_history", lambda history, room_tokens: ([], len(history) // 2))
+    second = client.post(f"/sessions/{session_id}/estimate", data={"transcript": "¿Cuántas personas tiene el equipo?", **FORM})
+    assert second.status_code == 200, second.text
+    assert second.json()["kind"] == "answer"
+    assert turns == ["generate-estimate", "generate-estimate"]
+
+
+def test_budget_counts_project_metadata(monkeypatch) -> None:
+    from app.services.llm_service import _budget
+    from app.services.prompt_builder import build_messages
+
+    block = get_context_block(TRANSCRIPT)
+
+    def total(metadata: str) -> int:
+        messages = build_messages(TRANSCRIPT, block, prompt_label="v3", project_metadata=metadata)
+        return _budget(messages, block, TRANSCRIPT, [], "openrouter/openai/gpt-4o-mini").total_input
+
+    long_scope = _metadata_json(agreed_scope="alcance acordado " * 200)
+    assert total(long_scope) > total("") + 400
+
+
+def test_store_keeps_sessions_that_are_answering() -> None:
+    clock = {"now": datetime(2026, 1, 1, 12, 0, 0)}
+    store = InMemorySessionStore(ttl_minutes=30, max_active=1, now=lambda: clock["now"])
+    busy = store.create()
+    busy.lock._locked = True  # Simula un turno en vuelo sin event loop.
+    try:
+        other = store.create()
+        assert store.get(busy.id) is busy
+        clock["now"] = clock["now"] + timedelta(minutes=31)
+        assert store.get(busy.id) is busy
+        with pytest.raises(SessionNotFoundError):
+            store.get(other.id)
+    finally:
+        busy.lock._locked = False
+
+
+def test_get_refreshes_the_session_clock() -> None:
+    clock = {"now": datetime(2026, 1, 1, 12, 0, 0)}
+    store = InMemorySessionStore(ttl_minutes=30, max_active=5, now=lambda: clock["now"])
+    session = store.create()
+    clock["now"] = clock["now"] + timedelta(minutes=20)
+    store.get(session.id)
+    clock["now"] = clock["now"] + timedelta(minutes=20)
+    assert store.get(session.id) is session
+
+
+def test_oversized_body_is_413_before_the_handler(client, monkeypatch) -> None:
+    monkeypatch.setenv("ATTACHMENT_MAX_FILES", "1")
+    monkeypatch.setenv("ATTACHMENT_MAX_BYTES", "1000")
+    monkeypatch.setenv("TRANSCRIPTION_MAX_CHARS", "1000")
+    get_settings.cache_clear()
+
+    async def complete(*_args, **_kwargs):
+        raise AssertionError("no debería llamar al modelo")
+
+    _install(monkeypatch, complete)
+    session_id = client.post("/sessions").json()["session_id"]
+    response = client.post(
+        f"/sessions/{session_id}/estimate",
+        data={"transcript": TRANSCRIPT, **FORM},
+        files={"attachments": ("grande.pdf", b"x" * 200_000, "application/pdf")},
+    )
+    assert response.status_code == 413
+    assert response.json()["error"] == "attachment_too_large"
+    # El mensaje es el del middleware, no el de read_up_to: cortó antes del handler.
+    assert response.json()["detail"].startswith("La petición supera")

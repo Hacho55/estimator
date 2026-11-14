@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { EstimationView } from "@/app/EstimationView";
 import {
   apiBase,
@@ -131,21 +131,31 @@ export default function Page() {
   const [context, setContext] = useState<ContextView | null>(null);
   const [contextError, setContextError] = useState("");
 
+  // Solo la última petición de sesión cuenta: una respuesta vieja no pisa el id activo.
+  const sessionRequest = useRef<AbortController | null>(null);
+
   async function openSession() {
-    const response = await fetch(`${apiBase()}/sessions`, { method: "POST" });
-    if (!response.ok) throw new Error("session");
-    const body = (await response.json()) as { session_id: string };
-    setSessionId(body.session_id);
-    setMetadata(EMPTY_METADATA);
+    sessionRequest.current?.abort();
+    const controller = new AbortController();
+    sessionRequest.current = controller;
+    try {
+      const response = await fetch(`${apiBase()}/sessions`, { method: "POST", signal: controller.signal });
+      if (!response.ok) throw new Error("session");
+      const body = (await response.json()) as { session_id: string };
+      if (sessionRequest.current !== controller) return;
+      setSessionId(body.session_id);
+      setMetadata(EMPTY_METADATA);
+    } catch (sessionError) {
+      if (controller.signal.aborted || sessionRequest.current !== controller) return;
+      throw sessionError;
+    }
   }
 
   useEffect(() => {
-    let cancelled = false;
-    openSession().catch(() => {
-      if (!cancelled) setError("No se pudo abrir la sesión.");
-    });
+    openSession().catch(() => setError("No se pudo abrir la sesión."));
     return () => {
-      cancelled = true;
+      sessionRequest.current?.abort();
+      sessionRequest.current = null;
     };
   }, []);
 

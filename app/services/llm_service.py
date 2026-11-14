@@ -302,6 +302,8 @@ class _Prepared:
     semantic_vector: list[float] | None = None
     semantic_bucket: str | None = None
     scrubbed_text: str = ""
+    # Hubo turnos antes, aunque el recorte los haya dejado fuera del prompt.
+    has_prior_turns: bool = False
 
 
 def _field_value(field: object | None) -> str | None:
@@ -437,6 +439,7 @@ def _prepare(
         prompt_label=prompt_label,
         cache_kind="exact" if cached is not None else None,
         scrubbed_text=transcription,
+        has_prior_turns=bool(history_source),
     )
 
 
@@ -444,7 +447,7 @@ async def _apply_semantic_cache(prepared: _Prepared, *, model: str) -> _Prepared
     """Tras la caché exacta: mide o sirve un vecino semántico. Solo el primer turno."""
     settings = get_settings()
     mode = settings.SEMANTIC_CACHE_MODE
-    if mode == "off" or prepared.history or prepared.cached is not None:
+    if mode == "off" or prepared.has_prior_turns or prepared.cached is not None:
         return prepared
     try:
         vector = await llm_client.embed(prepared.scrubbed_text)
@@ -613,7 +616,6 @@ async def _generate(
 async def _assemble(first: llm_client.LLMResult, prepared: _Prepared, *, transcription: str, model: str) -> TurnResult:
     settings = get_settings()
     messages = prepared.messages
-    history = prepared.history
     response_format = prepared.response_format
     metadata = prepared.metadata
     version = prepared.version
@@ -630,7 +632,7 @@ async def _assemble(first: llm_client.LLMResult, prepared: _Prepared, *, transcr
     latency = first.latency_ms
     try:
         turn = parse_turn(first.content)
-        _require_kind(turn, bool(history))
+        _require_kind(turn, prepared.has_prior_turns)
     except InvalidLLMOutputError as exc:
         repairs = 1
         repair_messages = ensure_alternation(
@@ -649,7 +651,7 @@ async def _assemble(first: llm_client.LLMResult, prepared: _Prepared, *, transcr
         )
         _require_complete(second)
         turn = parse_turn(second.content)
-        _require_kind(turn, bool(history))
+        _require_kind(turn, prepared.has_prior_turns)
         usage = _add_usage(usage, second)
         latency += second.latency_ms
         if second.cost_usd is not None:
@@ -682,7 +684,7 @@ async def _assemble(first: llm_client.LLMResult, prepared: _Prepared, *, transcr
     # Se guarda el turno ya postprocesado (mismo JSON que el historial), no el bruto del modelo.
     if cached is None and estimation is not None and estimation.is_estimable:
         store(key, content=history_content, model=answered.model, finish_reason=answered.finish_reason)
-        if prepared.semantic_vector is not None and prepared.semantic_bucket is not None and not history:
+        if prepared.semantic_vector is not None and prepared.semantic_bucket is not None and not prepared.has_prior_turns:
             store_semantic(
                 bucket=prepared.semantic_bucket,
                 vector=prepared.semantic_vector,
@@ -792,7 +794,10 @@ def _history_that_fits(transcription, block, history, overrides, model):
 def _budget(messages, block: ContextBlock, transcription: str, history: list[ChatMessage], model: str):
     settings = get_settings()
     system = system_text_of(messages)
-    instructions, _, _rest = system.partition("<examples>")
+    # Todo el system salvo los ejemplos, que van aparte: incluye scope, constraints y metadatos.
+    before, _, rest = system.partition("<examples>")
+    _examples, _, after = rest.partition("</examples>")
+    instructions = f"{before}{after}"
     history_text = "\n".join(message.content for message in history)
     return build_token_budget(
         instructions=instructions,

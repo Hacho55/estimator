@@ -64,3 +64,33 @@ def test_join_marks_the_filename() -> None:
     joined = join_attachments("Transcripción base del proyecto.", [("nota.pdf", "dentro")])
     assert "--- attachment: nota.pdf ---" in joined
     assert joined.startswith("Transcripción base del proyecto.")
+
+
+def _docx(build) -> bytes:
+    buffer = BytesIO()
+    document = Document()
+    build(document)
+    document.save(buffer)
+    return buffer.getvalue()
+
+
+def test_docx_reads_tables_in_document_order() -> None:
+    def build(document) -> None:
+        document.add_paragraph("INTRO")
+        table = document.add_table(rows=2, cols=2)
+        table.cell(0, 0).text = "REQ-PAGOS"
+        table.cell(1, 1).text = "REQ-ERP"
+        table.cell(1, 0).add_table(rows=1, cols=1).cell(0, 0).text = "REQ-ANIDADO"
+        document.add_paragraph("CIERRE")
+
+    text = extract_text("req.docx", _docx(build))
+    order = [text.index(token) for token in ("INTRO", "REQ-PAGOS", "REQ-ANIDADO", "REQ-ERP", "CIERRE")]
+    assert order == sorted(order)
+
+
+def test_docx_rejects_large_expansion(monkeypatch) -> None:
+    monkeypatch.setenv("ATTACHMENT_MAX_EXPANDED_BYTES", "1000")
+    get_settings.cache_clear()
+    data = _docx(lambda document: document.add_paragraph("A" * 5000))
+    with pytest.raises(AttachmentTooLargeError):
+        extract_text("bomba.docx", data)

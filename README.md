@@ -112,6 +112,7 @@ Cada cambio en `.env` exige reiniciar uvicorn. La configuración se lee una vez 
 | `SESSION_MAX_TURNS` | no | `6` | entero mayor que 0 | Pares de una sesión. Al pasarse, se tiran los más viejos. Sin anclas |
 | `ATTACHMENT_MAX_FILES` | no | `5` | entero mayor que 0 | Adjuntos por petición en `/sessions/{id}/estimate` |
 | `ATTACHMENT_MAX_BYTES` | no | `5000000` | entero mayor que 0 | Tamaño máximo de cada adjunto |
+| `ATTACHMENT_MAX_EXPANDED_BYTES` | no | `50000000` | entero mayor que 0 | Tamaño descomprimido máximo de un DOCX. El cuerpo multipart entero se corta en `ATTACHMENT_MAX_FILES × ATTACHMENT_MAX_BYTES` más el texto |
 | `CONVERSATION_TTL_MINUTES` | no | `60` | entero mayor que 0 | Vida de una conversación en memoria |
 | `CONVERSATION_MAX_ACTIVE` | no | `1000` | entero mayor que 0 | Conversaciones simultáneas. Al pasarse, se elimina la más antigua |
 | `CONVERSATION_NEAR_LIMIT_RATIO` | no | `0.8` | entre 0 y 1 | A partir de qué fracción de la ventana `near_limit` pasa a `true` |

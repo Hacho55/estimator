@@ -99,7 +99,11 @@ class InMemorySessionStore:
     def create(self) -> Session:
         self._expire()
         while len(self._items) >= self.max_active:
-            oldest = min(self._items.values(), key=lambda item: item.updated_at)
+            idle = [item for item in self._items.values() if not item.lock.locked()]
+            if not idle:
+                # Todas atienden un turno: se acepta pasar el cupo antes que perder una en vuelo.
+                break
+            oldest = min(idle, key=lambda item: item.updated_at)
             del self._items[oldest.id]
         now = self._now()
         session = Session(
@@ -116,11 +120,19 @@ class InMemorySessionStore:
         session = self._items.get(session_id)
         if session is None:
             raise SessionNotFoundError(session_id)
+        self.touch(session)
         return session
+
+    def touch(self, session: Session) -> None:
+        session.updated_at = self._now()
 
     def _expire(self) -> None:
         now = self._now()
-        expired = [key for key, item in self._items.items() if now - item.updated_at > self.ttl]
+        expired = [
+            key
+            for key, item in self._items.items()
+            if now - item.updated_at > self.ttl and not item.lock.locked()
+        ]
         for key in expired:
             del self._items[key]
 

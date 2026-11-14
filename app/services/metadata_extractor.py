@@ -9,7 +9,7 @@ import structlog
 from app.config import get_settings
 from app.prompts.loader import render_metadata_prompt
 from app.schemas.estimation import UsageInfo
-from app.schemas.session import ProjectMetadata
+from app.schemas.session import ExtractedMetadata, ProjectMetadata
 from app.services import llm_client
 
 log = structlog.get_logger(__name__)
@@ -30,7 +30,7 @@ def metadata_response_format() -> dict:
         "type": "json_schema",
         "json_schema": {
             "name": "project_metadata",
-            "schema": ProjectMetadata.model_json_schema(),
+            "schema": ExtractedMetadata.model_json_schema(),
             "strict": False,
         },
     }
@@ -68,7 +68,7 @@ async def extract_project_metadata(
         return MetadataExtraction(metadata=previous)
     usage = _usage_of(result)
     try:
-        metadata = ProjectMetadata.model_validate_json(result.content)
+        metadata = ExtractedMetadata.model_validate_json(result.content).to_metadata()
     except Exception as exc:  # noqa: BLE001
         log.warning("metadata_extraction_failed", reason=str(exc))
         return MetadataExtraction(metadata=previous, usage=usage, cost_usd=result.cost_usd, latency_ms=result.latency_ms)

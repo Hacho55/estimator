@@ -7,6 +7,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.attachments.upload_limit import UploadSizeLimit
 from app.config import APP_VERSION, get_settings
 from app.observability import flush_langfuse, setup_observability
 from app.routers import estimations, estimations_v2, sessions
@@ -29,6 +30,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 setup_observability(app)  # Observabilidad: logs JSON y cabecera x-request-id.
+# Sesión 5 · adjuntos: corta el multipart mientras llega, antes del spool a disco.
+# Va antes que CORS para que el 413 también lleve sus cabeceras.
+app.add_middleware(UploadSizeLimit)
 # Sesión 3 · front: Next puede caer en otro puerto si el 3000 está ocupado.
 app.add_middleware(
     CORSMiddleware,

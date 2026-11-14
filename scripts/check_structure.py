@@ -46,6 +46,7 @@ REQUIRED = [
     "app/prompts/metadata/v1/user.j2",
     "app/attachments/__init__.py",
     "app/attachments/extractor.py",
+    "app/attachments/upload_limit.py",
     "app/schemas/session.py",
     "app/state/sessions.py",
     "app/routers/sessions.py",

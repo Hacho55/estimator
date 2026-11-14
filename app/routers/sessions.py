@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+import asyncio
 
 from fastapi import APIRouter, File, Form, UploadFile
 
@@ -50,7 +50,8 @@ async def estimate_session(
     output_format: str | None = Form(default=None),
     attachments: list[UploadFile] | None = File(default=None),
 ) -> SessionEstimateResponse:
-    session = get_session_store().get(session_id)
+    store = get_session_store()
+    session = store.get(session_id)
     async with session.lock:
         text = _bounded_transcript(transcript, first_turn=session.history.turn_count() == 0)
         extracted = await _read_attachments(attachments or [])
@@ -88,7 +89,7 @@ async def estimate_session(
             result.history_content,
             result.kind,
         )
-        session.updated_at = datetime.now()
+        store.touch(session)
         return _response(session.id, extraction, result)
 
 
@@ -139,7 +140,8 @@ async def _read_attachments(uploads: list[UploadFile]) -> list[tuple[str, str]]:
     for upload in present:
         data = await read_up_to(upload, settings.ATTACHMENT_MAX_BYTES)
         name = attachment_label(upload.filename or "adjunto")
-        text = extract_text(name, data)
+        # pypdf y python-docx son CPU: fuera del event loop del único worker.
+        text = await asyncio.to_thread(extract_text, name, data)
         total_chars += len(text)
         if total_chars > settings.TRANSCRIPTION_MAX_CHARS:
             raise AttachmentTooLargeError("El texto de los adjuntos supera el largo máximo.")
