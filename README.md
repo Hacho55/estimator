@@ -6,6 +6,15 @@ Servicio FastAPI que recibe la transcripción de una reunión y devuelve una est
 
 El documento de la revisión es [experiments/CONCLUSIONES.md](experiments/CONCLUSIONES.md). Ahí está la estrategia elegida, cómo se puntuó y la tabla completa de la corrida del 26 de octubre de 2026. Los CSV que genera el script en `experiments/results/` no se versionan.
 
+Sesión 5 (contexto dinámico, memoria, perfiles, evaluación y Actor-Critic-Boss):
+
+- [docs/architecture.md](docs/architecture.md): un turno de sesión de principio a fin y qué archivo decide cada cosa.
+- [docs/decisions/](docs/decisions/README.md): las decisiones de arquitectura, con alternativas y cuándo revisarlas.
+- [docs/specs/](docs/specs/README.md): escenarios *cuando… entonces…* por capacidad, cada uno con su test.
+- [docs/evals.md](docs/evals.md): cómo se evalúa con el modelo real y las primeras mediciones.
+- [docs/insights.md](docs/insights.md): prácticas reutilizables en otros proyectos, por tema.
+- [docs/plan-session-5.md](docs/plan-session-5.md): el plan con el que se construyó.
+
 ## Requisitos
 
 - Python 3.11 o superior. El proyecto fija 3.12 en `.python-version`.
@@ -331,6 +340,8 @@ Cliente (front Next → /api/v2)
 
 El router no construye prompts ni traduce errores del modelo. Esos errores salen como `ServiceError` y `main.py` los convierte en HTTP. Conversaciones y caché exacta viven en `app/state/` (memoria del proceso). La caché semántica usa Redis si hay `REDIS_URL`.
 
+Las sesiones (`/sessions`) añaden identidad y tier (`app/security/`, `app/tiers.py`), adjuntos (`app/attachments/`), memoria (`app/state/memory.py`), herramientas (`app/tools/`, `research.py`), vista por tier (`tier_views.py`) y revisión (`critic.py`, `boss.py`, `review_loop.py`). El recorrido completo está en [docs/architecture.md](docs/architecture.md).
+
 Un worker. La caché exacta coincide en descripción, modelo, temperatura, versión del prompt e historial. La semántica solo mira el primer turno, con bucket por versión/formato/modelo. `SEMANTIC_CACHE_MODE=log` mide sin servir. Quien itera `stream_estimation` ve el markdown visible por trozos.
 
 ## Dónde se ajusta el funcionamiento
@@ -353,7 +364,12 @@ La configuración de una ejecución va en `.env`. El comportamiento del producto
 | Caché semántica | `app/state/semantic_cache.py`, `SEMANTIC_CACHE_*`, `REDIS_URL` |
 | Campos de la petición o de la respuesta | `app/schemas/`. Un cambio que rompa el contrato va a `/api/v2` |
 | Comparar formato, detalle, número de ejemplos o modelo | `experiments/variants.toml` y `uv run python scripts/run_experiment.py` |
-| Textos de prueba y rangos esperados | `data/transcripcion_reunion.md` y `data/transcripciones/` |
+| Textos de prueba y rangos esperados | `data/transcripcion_reunion.md`, `data/transcripciones/` y `evals/golden_dataset.yaml` |
+| Qué tiers hay, su plantilla, herramientas y si llevan revisión | `app/tiers.py`; textos en `app/prompts/estimation/v4/system_<tier>.j2` y parciales |
+| Cómo se fusionan y olvidan los hechos de la sesión | `app/state/memory.py` (fusión) y `SESSION_*` (archivo y retención) |
+| Cuándo se ofrecen herramientas | `app/services/tool_policy.py` y `TOOLS_*` |
+| Criterios del crítico y reglas del Boss | `app/prompts/critic/<versión>/` y `app/services/boss.py` |
+| Propiedades que se comprueban (tests, evals y Langfuse) | `app/evaluation/properties.py` |
 
 Los ejemplos van en un orden fijo. Reordenarlos por petición rompería la caché del prefijo. Cuando haya retrieval, el orden podrá cambiar y los ejemplos quedarán fuera de ese prefijo.
 
@@ -384,7 +400,7 @@ El bloque de sistema es idéntico en todas las peticiones de un solo turno. Open
 
 ## Experimentos
 
-`data/transcripciones/` tiene cinco casos con un rango de horas esperado. `experiments/variants.toml` cambia una cosa cada vez (formato, detalle, número de ejemplos, modelo, caché).
+Los casos salen del golden dataset (`evals/golden_dataset.yaml`, los de un turno sin adjuntos). `experiments/variants.toml` cambia una cosa cada vez (formato, detalle, número de ejemplos, modelo, caché) y, desde la sesión 5, el tier y la revisión (`tier-*`). `--variant` y `--case` filtran por prefijo.
 
 ```bash
 uv run python scripts/run_experiment.py --dry-run
@@ -411,6 +427,14 @@ REDIS_URL=redis://127.0.0.1:6379 uv run pytest -m redis
 ```
 
 Los tests del job principal no llaman al modelo: sustituyen `llm_client.complete` (y el embedding cuando hace falta) y dejan las claves de Langfuse vacías. GitHub Actions añade jobs aparte para Presidio y Redis.
+
+Las evals con el modelo real están en `evals/` y no corren por defecto (cuestan dinero). Detalle en [docs/evals.md](docs/evals.md):
+
+```bash
+uv run pytest evals -m "eval and not slow"
+```
+
+GitHub Actions las lanza en PR a `main` (`evals-hard`, si hay `LITELLM_API_KEY` en los secretos) y a mano (`evals-full`).
 
 ## Evolución
 

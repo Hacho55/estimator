@@ -34,7 +34,7 @@ Menos es más. El preprocesamiento anonimiza, normaliza y calcula los totales; e
 
 ## Revisión
 
-La conclusión del experimento de contexto está en `experiments/CONCLUSIONES.md`. Ideas reutilizables de las sesiones 2–5: `docs/insights.md`.
+La conclusión del experimento de contexto está en `experiments/CONCLUSIONES.md`. Ideas reutilizables de las sesiones 2–5, por tema: `docs/insights.md`. Recorrido de un turno: `docs/architecture.md`. Decisiones de arquitectura: `docs/decisions/` (una nueva por decisión que cueste revertir). Especificación viva: `docs/specs/`; un escenario nuevo o cambiado lleva su test en el mismo commit (`tests/test_specs.py` comprueba que las referencias existen).
 
 ## Secretos y verificación
 

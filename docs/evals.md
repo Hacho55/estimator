@@ -100,6 +100,17 @@ Dos ejecuciones de humo con el modelo real (`landing-hubspot`):
 | developer | propiedades OK | 105 | 0,054 USD | 8.043 / 4.898 |
 | pm (con revisión) | propiedades OK | 107 | 0,069 USD | 13.277 / 5.341 |
 
+Y de punta a punta en la app (front, backend de negocio y estimador con `AUTH_MODE=jwt`), sesión
+«Atlas» (portal de reservas):
+
+| Turno | Tier | Herramientas | Revisión | Segundos | Tokens (entrada / salida) |
+|---|---|---|---|---|---|
+| 1, estimación | pm | `find_similar_projects` | aceptada, 1 intento | 66 | 17.477 / 7.329 |
+| 2, «quita los avisos por correo» | executive | — | aceptada, 1 intento | 97 | 16.110 / 4.517 |
+
+El cambio de perfil entre turnos queda en `memory_changes`, la memoria actualiza el alcance en
+el turno 2 y la vista ejecutiva trae rangos calculados por el código (22.500–34.500 EUR).
+
 La latencia está muy por encima del objetivo del plan (< 12 s developer, < 25 s pm): el modelo
 genera unos 5.000 tokens de salida para una landing. Antes de ajustar la activación de la
 revisión conviene revisar `LLM_MAX_TOKENS`, la profundidad por defecto y el modelo del actor.
