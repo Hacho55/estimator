@@ -1,0 +1,96 @@
+# Calibración del juez (fase 4, 4D). Salidas con veredicto humano, algunas estropeadas a propósito.
+# scripts/calibrate_judge.py pasa el juez por cada una y mide el acuerdo con la persona.
+# Revisar los veredictos (`human`) antes de fiarse del umbral resultante.
+
+items:
+  - id: landing-buena-developer
+    metric: ScopeCoherence
+    input: Landing con formulario conectado a HubSpot y un blog. Diseño en Figma cerrado. Sin área de usuarios ni pagos.
+    output: |
+      ## Landing con HubSpot
+      ### Frontend (60 h) — Maquetación desde Figma, blog con editor. Riesgo: rendimiento del blog.
+      ### Integraciones (30 h) — Formulario contra la API de HubSpot con manejo de errores. Riesgo: límites de la API.
+      ### QA (15 h) — Pruebas de formulario y blog.
+      Horas: 105 (95–115). Supuestos: hosting del cliente; solo español.
+    human: pass
+    why: Componentes y riesgos encajan con lo pedido.
+
+  - id: landing-con-pagos-inventados
+    metric: ScopeCoherence
+    input: Landing con formulario conectado a HubSpot y un blog. Diseño en Figma cerrado. Sin área de usuarios ni pagos.
+    output: |
+      ## Landing con HubSpot
+      ### Pasarela de pagos (80 h) — Stripe y PayPal.
+      ### Área de usuarios (60 h) — Registro, login y perfil.
+      ### Frontend (40 h) — Maquetación.
+      Horas: 180. Riesgo: fraude en pagos.
+    human: fail
+    why: Añade pagos y usuarios que el cliente excluyó; olvida HubSpot y el blog.
+
+  - id: erp-sin-reintentos
+    metric: ScopeCoherence
+    input: Sincronizar pedidos con un ERP por API con reintentos, panel de errores y conciliación diaria. El ERP limita a 60 peticiones por minuto.
+    output: |
+      ## Integración ERP
+      ### Backend (80 h) — Alta de pedidos en el ERP.
+      ### Frontend (40 h) — Rediseño del checkout.
+      Riesgo: cambios de diseño.
+    human: fail
+    why: Omite reintentos, panel y conciliación; incluye un rediseño excluido; riesgo irrelevante.
+
+  - id: erp-bueno
+    metric: ScopeCoherence
+    input: Sincronizar pedidos con un ERP por API con reintentos, panel de errores y conciliación diaria. El ERP limita a 60 peticiones por minuto.
+    output: |
+      ## Integración ERP
+      ### Integración (90 h) — Alta de pedidos, cola con reintentos y control del límite de 60 peticiones/min.
+      ### Panel de errores (40 h) — Listado, reintento manual y alertas.
+      ### Conciliación (30 h) — Proceso diario y informe de diferencias.
+      Riesgos: límite de la API del ERP; entorno de pruebas inestable.
+    human: pass
+    why: Cubre las tres piezas pedidas y el riesgo evidente del límite.
+
+  - id: executive-bueno
+    metric: TierFit:executive
+    input: Portal de reservas para un centro deportivo con pagos en línea y panel de administración.
+    output: |
+      ## Portal de reservas
+      **Coste:** 18.000–24.000 EUR · **Duración:** 8–11 semanas · **Confianza:** media (el volumen de reservas aún no está claro).
+      Riesgos: integración de pagos con la entidad del cliente; adopción por parte de los socios; picos de reservas en fin de semana.
+      **Recomendación:** seguir, con un piloto en un centro antes de extenderlo.
+    human: pass
+    why: Cifras de cabecera, confianza explicada, tres riesgos de negocio y recomendación accionable.
+
+  - id: executive-con-jerga
+    metric: TierFit:executive
+    input: Portal de reservas para un centro deportivo con pagos en línea y panel de administración.
+    output: |
+      ## Portal de reservas
+      Backend en NestJS con TypeORM sobre PostgreSQL 16, colas BullMQ en Redis, webhooks de Stripe con idempotency keys,
+      frontend Next.js 15 con RSC. Endpoints: POST /bookings, PATCH /bookings/:id. Tests e2e con Playwright.
+    human: fail
+    why: Jerga técnica sin cifras de cabecera, sin confianza ni recomendación.
+
+  - id: pm-bueno
+    metric: TierFit:pm
+    input: App móvil de citas para 12 clínicas, iOS y Android, con recordatorios y calendario del personal.
+    output: |
+      ## App de citas
+      | Fase | Semanas | Coste |
+      | Descubrimiento y diseño | 3 | 6.000 |
+      | Desarrollo | 7 | 21.000 |
+      | QA y publicación | 2 | 4.500 |
+      Hitos: diseño aprobado (fin de diseño); beta en TestFlight (fin de desarrollo); publicación en tiendas.
+      Equipo: 1 diseño, 2 móvil, 1 QA. Bloqueos: acceso al CSV de agendas; cuentas de desarrollador de las tiendas.
+    human: pass
+    why: Fases, hitos con entregable, equipo y bloqueos, que es lo que planifica un PM.
+
+  - id: pm-sin-hitos
+    metric: TierFit:pm
+    input: App móvil de citas para 12 clínicas, iOS y Android, con recordatorios y calendario del personal.
+    output: |
+      ## App de citas
+      Es un proyecto interesante y con mucho potencial. Recomendamos usar tecnologías modernas y un equipo motivado.
+      Coste aproximado: depende.
+    human: fail
+    why: Ni fases, ni hitos, ni equipo, ni cifras.

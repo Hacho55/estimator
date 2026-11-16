@@ -306,3 +306,19 @@ def test_spend_of_a_failed_retry_is_counted(client, pm_tier, monkeypatch) -> Non
     # Actor 1, crítico 1, actor 2 y su reparación (inválidos), y el extractor: 5 llamadas de 20 tokens.
     assert body["usage"]["input_tokens"] == 20 * 5
     assert body["review"]["decision"] == "synthesize"
+
+
+def test_forced_review_mode_is_part_of_the_cache_identity(monkeypatch) -> None:
+    import asyncio
+
+    from app.services.llm_service import ContextOverrides, generate_estimation
+
+    script = Script(monkeypatch)
+    transcript = TRANSCRIPT
+    base = dict(prompt_version="v4", tier="pm", project_type="web_saas")
+    asyncio.run(generate_estimation(transcript, overrides=ContextOverrides(**base, review="none")))
+    assert not any(name.startswith("critic") for name in script.names())
+    script.calls.clear()
+    result = asyncio.run(generate_estimation(transcript, overrides=ContextOverrides(**base, review="acb")))
+    assert result.cache_hit is False
+    assert "critic-1" in script.names()

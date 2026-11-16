@@ -36,3 +36,36 @@ model = "openrouter/anthropic/claude-haiku-4.5"
 [[variant]]
 name = "prompt-v2"
 prompt_version = "v2"
+
+# Sesión 5 · tiers y revisión (3E, 5F). Plantilla v4 por perfil; review fuerza la revisión
+# Actor-Critic-Boss a "acb" o "none" para medir si compensa en cada tier.
+# Solo estas: uv run python scripts/run_experiment.py --variant tier- --name tiers
+
+[[variant]]
+name = "tier-developer"
+tier = "developer"
+
+[[variant]]
+name = "tier-developer-acb"
+tier = "developer"
+review = "acb"
+
+[[variant]]
+name = "tier-pm-none"
+tier = "pm"
+review = "none"
+
+[[variant]]
+name = "tier-pm-acb"
+tier = "pm"
+review = "acb"
+
+[[variant]]
+name = "tier-executive-none"
+tier = "executive"
+review = "none"
+
+[[variant]]
+name = "tier-executive-acb"
+tier = "executive"
+review = "acb"

@@ -153,6 +153,7 @@ class ContextOverrides:
     tier: str | None = None  # Perfil del llamante (app/tiers.py). None: contrato clásico de v1/v2.
     call_name: str = "generate-estimate"  # Nombre de la llamada en trazas (actor-2 en la revisión).
     defer_cache: bool = False  # Con revisión, solo se cachea la salida final aceptada.
+    review: str | None = None  # "none" o "acb" fuerza la revisión (experimentos 5F); None = lo del tier.
 
 
 @dataclass
@@ -383,7 +384,11 @@ def _add_research(result: TurnResult, research: ResearchOutcome) -> TurnResult:
 def _review_enabled(overrides: ContextOverrides) -> bool:
     """D14: la revisión la declara el tier (app/tiers.py); ACB_ENABLED la apaga entera."""
     config = _tier_config(overrides)
-    return bool(config and config.review == "acb" and get_settings().ACB_ENABLED)
+    if config is None or not get_settings().ACB_ENABLED:
+        return False
+    # Un experimento puede forzarla en cualquier tier para medir si compensa (fase 5, 5F).
+    mode = overrides.review or config.review
+    return mode == "acb"
 
 
 def _needs_review(result: TurnResult) -> bool:
@@ -602,6 +607,14 @@ def _system_template(overrides: ContextOverrides) -> str:
     return config.template if config else "system.j2"
 
 
+def _cache_identity(overrides: ContextOverrides) -> dict | None:
+    """Lo que distingue una respuesta en la caché exacta: contexto dinámico y, si se forzó, la revisión."""
+    payload = _dynamic_payload(overrides.dynamic, overrides.project_metadata)
+    if overrides.review is None:
+        return payload
+    return {**(payload or {}), "review": overrides.review}
+
+
 def _dynamic_payload(dynamic: DynamicContext | None, legacy_metadata: str = "") -> dict | None:
     """El contexto dinámico que afecta a la respuesta, como dato serializable para las cachés.
 
@@ -737,7 +750,7 @@ def _prepare(
         project_type=_field_value(overrides.project_type),
         form_detail_level=_field_value(form_detail),
         output_format=_field_value(output_format),
-        dynamic=_dynamic_payload(overrides.dynamic, overrides.project_metadata),
+        dynamic=_cache_identity(overrides),
     )
     cached = lookup(key)
     return _Prepared(

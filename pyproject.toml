@@ -25,6 +25,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "deepeval>=3",
     "httpx>=0.28.1",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
@@ -34,10 +35,13 @@ dev = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = "-m 'not presidio and not redis'"
+addopts = "-m 'not presidio and not redis and not eval'"
 markers = [
     "presidio: requiere Presidio con el modelo spaCy es_core_news_md",
     "redis: requiere Redis con búsqueda vectorial",
+    "eval: evals contra el modelo real (evals/); cuestan dinero",
+    "slow: varias llamadas por caso (consistencia, juez)",
+    "judge: LLM-as-judge con DeepEval",
 ]
 
 [tool.ruff]

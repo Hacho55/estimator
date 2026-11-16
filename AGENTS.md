@@ -40,8 +40,10 @@ La conclusión del experimento de contexto está en `experiments/CONCLUSIONES.md
 
 `.env` no se versiona. Los tests sustituyen `llm_client.complete` (y el embedding cuando toca) y no llevan claves de Langfuse. Los marcados `presidio` y `redis` no corren en el job principal.
 
-Antes de dar un cambio por terminado: `uv run python scripts/check_structure.py`, `uv run ruff check .`, `uv run pytest`. Si cambió el prompt o los ejemplos, `uv run python scripts/run_experiment.py --dry-run`.
+`tests/` prueba el código con el modelo simulado; `evals/` prueba el sistema con el modelo real sobre el golden dataset (`evals/golden_dataset.yaml`), cuesta dinero y no corre en el job principal. Las propiedades que comprueban las evals viven en `app/evaluation/properties.py`. Ver `docs/evals.md`.
+
+Antes de dar un cambio por terminado: `uv run python scripts/check_structure.py`, `uv run ruff check .`, `uv run pytest`. Si cambió el prompt o los ejemplos, `uv run python scripts/run_experiment.py --dry-run` y, con credenciales, `uv run pytest evals -m "eval and not slow"`.
 
 Cada cambio se anota en `CHANGELOG.md`, en `[Unreleased]`. Un cambio de prompt incluye su `prompt_version`.
 
-Las skills del repo están en `.agents/skills/`: `verify-estimador`, `iterate-system-prompt`, `add-estimation-example`, `update-changelog`.
+Las skills del repo están en `.agents/skills/`: `verify-estimador`, `iterate-system-prompt`, `add-estimation-example`, `add-golden-case`, `update-changelog`.

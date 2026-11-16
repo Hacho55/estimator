@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import csv
+import os
 import sys
 import tomllib
 from datetime import UTC, datetime
@@ -26,29 +27,24 @@ from app.tokens import count_tokens  # noqa: E402
 
 
 def load_cases() -> list[dict]:
+    """Los casos de un turno del golden dataset (evals/golden_dataset.yaml): una sola fuente."""
+    from evals.dataset import load_dataset
+
     cases = []
-    for path in sorted((ROOT / "data" / "transcripciones").glob("*.md")):
-        text = path.read_text(encoding="utf-8")
-        expected: dict = {}
-        body = text
-        if text.startswith("---"):
-            _, front, body = text.split("---", 2)
-            for line in front.splitlines():
-                if ":" not in line:
-                    continue
-                key, value = line.split(":", 1)
-                value = value.strip()
-                if value == "true":
-                    parsed: object = True
-                elif value == "false":
-                    parsed = False
-                else:
-                    try:
-                        parsed = int(value)
-                    except ValueError:
-                        parsed = value
-                expected[key.strip().removeprefix("expected_")] = parsed
-        cases.append({"id": path.stem, "input": body.strip(), "expected": expected})
+    for case in load_dataset():
+        if case.turns or case.attachments:
+            continue  # Sesiones y adjuntos se miden en evals/, que pasa por la API.
+        expected = case.expected
+        hours = expected.hours_range or (None, None)
+        cases.append(
+            {
+                "id": case.id,
+                "input": case.transcript,
+                "project_type": case.project_type,
+                "expected": {"estimable": expected.estimable, "hours_min": hours[0], "hours_max": hours[1]},
+                "properties": expected.as_properties(),
+            }
+        )
     return cases
 
 
@@ -57,15 +53,31 @@ def load_variants() -> list[dict]:
         return list(tomllib.load(handle).get("variant", []))
 
 
-def overrides_from(variant: dict) -> ContextOverrides:
+def overrides_from(variant: dict, case: dict | None = None) -> ContextOverrides:
+    """``tier`` y ``review`` (none | acb) sirven para medir si la revisión compensa por perfil (5F)."""
+    tier = variant.get("tier")
     return ContextOverrides(
         format=variant.get("format"),
         detail_level=variant.get("detail_level"),
         max_examples=variant.get("max_examples"),
         model=variant.get("model"),
         prompt_cache=variant.get("prompt_cache"),
-        prompt_version=variant.get("prompt_version"),
+        prompt_version=variant.get("prompt_version") or ("v4" if tier else None),
+        tier=tier,
+        review=variant.get("review"),
+        project_type=(case or {}).get("project_type") if tier else None,
     )
+
+
+def _properties(result, case: dict) -> tuple[int, int]:
+    """Propiedades que pasan sobre la vista del tier (las mismas que evals/ y Langfuse)."""
+    if getattr(result, "view", None) is None or not getattr(result, "tier", None):
+        return 0, 0
+    from app.evaluation.properties import Subject, run_properties
+
+    subject = Subject(tier=result.tier, view=result.view, estimation=result.estimation, expected=case["properties"])
+    checks = run_properties(subject, offline=True)
+    return sum(item.passed for item in checks), len(checks)
 
 
 def dry_row(variant: dict, case: dict) -> dict:
@@ -84,9 +96,14 @@ def dry_row(variant: dict, case: dict) -> dict:
         "detail": block.detail_level,
         "format": block.format,
         "model": chosen.model or settings.LLM_MODEL,
+        "tier": variant.get("tier", ""),
+        "review": variant.get("review", ""),
         "json_valid_first_try": "",
         "warnings": "",
         "total_hours": "",
+        "properties": "",
+        "review_decision": "",
+        "actor_calls": "",
         "cost_usd": "",
         "latency_ms": "",
         "cached_tokens": "",
@@ -94,10 +111,15 @@ def dry_row(variant: dict, case: dict) -> dict:
 
 
 async def live_row(variant: dict, case: dict) -> dict:
-    result = await generate_estimation(case["input"], overrides=overrides_from(variant))
+    from app.state.response_cache import clear_response_cache
+
+    clear_response_cache()  # Un experimento mide el modelo, no la caché.
+    result = await generate_estimation(case["input"], overrides=overrides_from(variant, case))
     hours = ""
     if result.estimation is not None:
         hours = result.estimation.total_hours  # type: ignore[attr-defined]
+    passed, total = _properties(result, case)
+    review = result.review
     return {
         "variant": variant["name"],
         "case": case["id"],
@@ -106,9 +128,14 @@ async def live_row(variant: dict, case: dict) -> dict:
         "detail": result.context.detail_level,
         "format": result.context.format,
         "model": result.model,
+        "tier": variant.get("tier", ""),
+        "review": variant.get("review", ""),
         "json_valid_first_try": int(result.repairs == 0),
         "warnings": len(result.warnings),
         "total_hours": hours,
+        "properties": f"{passed}/{total}" if total else "",
+        "review_decision": review.decision if review else "",
+        "actor_calls": review.actor_calls if review else "",
         "cost_usd": result.cost_usd if result.cost_usd is not None else "",
         "latency_ms": round(result.latency_ms, 1),
         "cached_tokens": result.usage.cached_tokens,
@@ -116,6 +143,8 @@ async def live_row(variant: dict, case: dict) -> dict:
 
 
 def write_report(rows: list[dict], name: str) -> Path:
+    if not rows:
+        raise ValueError("No hay filas: ningún caso o variante coincide con los filtros.")
     folder = ROOT / "experiments" / "results"
     folder.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
@@ -147,12 +176,17 @@ def publish_langfuse(cases: list[dict], variants: list[dict], name: str) -> None
         metadata = item["metadata"] if isinstance(item, dict) else item.metadata
         variant = metadata["variant"]
         del kwargs
-        result = await generate_estimation(item["input"], overrides=overrides_from(variant))
+        case = metadata["case"]
+        result = await generate_estimation(item["input"], overrides=overrides_from(variant, case))
+        passed, total = _properties(result, case)
         return {
             "warnings": len(result.warnings),
             "hours": None if result.estimation is None else result.estimation.total_hours,  # type: ignore[attr-defined]
             "first_try": result.repairs == 0,
             "kind": result.kind,
+            "properties_ratio": passed / total if total else None,
+            "review_decision": result.review.decision if result.review else None,
+            "cost_usd": result.cost_usd,
         }
 
     def warnings_evaluator(*, output, **kwargs):
@@ -161,6 +195,11 @@ def publish_langfuse(cases: list[dict], variants: list[dict], name: str) -> None
     def first_try_evaluator(*, output, **kwargs):
         return Evaluation(name="json_valid_first_try", value=1.0 if output.get("first_try") else 0.0)
 
+    def properties_evaluator(*, output, **kwargs):
+        # Las mismas propiedades que la suite evals/: una definición, varios usos (fase 4).
+        ratio = output.get("properties_ratio")
+        return Evaluation(name="properties_passed", value=float(ratio) if ratio is not None else 0.0)
+
     data = []
     for variant in variants:
         for case in cases:
@@ -168,14 +207,14 @@ def publish_langfuse(cases: list[dict], variants: list[dict], name: str) -> None
                 {
                     "input": case["input"],
                     "expected_output": case["expected"],
-                    "metadata": {"case": case["id"], "variant": variant},
+                    "metadata": {"case": case, "variant": variant},
                 }
             )
     result = langfuse.run_experiment(
         name=name,
         data=data,
         task=task,
-        evaluators=[warnings_evaluator, first_try_evaluator],
+        evaluators=[warnings_evaluator, first_try_evaluator, properties_evaluator],
         max_concurrency=2,
         metadata={"source": "scripts/run_experiment.py"},
     )
@@ -202,9 +241,18 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="Solo presupuesto de tokens, sin LLM.")
     parser.add_argument("--name", default="contexto")
     parser.add_argument("--langfuse", action="store_true", help="Publica el experimento en Langfuse.")
+    parser.add_argument("--variant", default="", help="Solo las variantes cuyo nombre empieza así (p. ej. tier-).")
+    parser.add_argument("--case", default="", help="Solo los casos cuyo id empieza así.")
     args = parser.parse_args()
-    cases = load_cases()
-    variants = load_variants()
+    cases = [case for case in load_cases() if case["id"].startswith(args.case)]
+    variants = [variant for variant in load_variants() if variant["name"].startswith(args.variant)]
+    if not cases or not variants:
+        print(f"Nada que ejecutar: {len(cases)} casos y {len(variants)} variantes con esos filtros.", file=sys.stderr)
+        return 2
+    if not args.dry_run:
+        # La caché semántica serviría respuestas de otra variante parecida: fuera durante el experimento.
+        os.environ["SEMANTIC_CACHE_MODE"] = "off"
+        get_settings.cache_clear()
     if args.dry_run:
         rows = [dry_row(variant, case) for variant in variants for case in cases]
     else:

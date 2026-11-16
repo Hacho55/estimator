@@ -3,6 +3,13 @@ name: ci
 on:
   push:
   pull_request:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: "Evals contra el modelo real: hard (propiedades) o full (más consistencia y juez)"
+        type: choice
+        options: [hard, full]
+        default: hard
 
 jobs:
   test:
@@ -81,6 +88,58 @@ jobs:
           APP_ENV: development
           LANGFUSE_PUBLIC_KEY: ""
           LANGFUSE_SECRET_KEY: ""
+
+  # Evals contra el modelo real (fase 4, D12). Cuestan dinero: hard en PR a main y a mano;
+  # soft y juez solo a mano. Sin el secreto, el job no hace nada.
+  evals-hard:
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.base_ref == 'main')
+    runs-on: ubuntu-latest
+    env:
+      LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
+      LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL }}
+      LLM_MODEL: ${{ vars.LLM_MODEL }}
+      CRITIC_MODEL: ${{ vars.CRITIC_MODEL }}
+      APP_ENV: ci
+      LANGFUSE_PUBLIC_KEY: ""
+      LANGFUSE_SECRET_KEY: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          prune-cache: false
+      - name: Instalar dependencias
+        run: uv sync --locked
+      - name: Evals hard
+        if: env.LITELLM_API_KEY != ''
+        run: uv run pytest evals -m "eval and not slow"
+      - name: Sin credenciales
+        if: env.LITELLM_API_KEY == ''
+        run: echo "Sin LITELLM_API_KEY en los secretos del repositorio; evals omitidas."
+
+  evals-full:
+    if: github.event_name == 'workflow_dispatch' && inputs.suite == 'full'
+    runs-on: ubuntu-latest
+    env:
+      LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
+      LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL }}
+      LLM_MODEL: ${{ vars.LLM_MODEL }}
+      CRITIC_MODEL: ${{ vars.CRITIC_MODEL }}
+      EVAL_JUDGE_MODEL: ${{ vars.EVAL_JUDGE_MODEL }}
+      APP_ENV: ci
+      LANGFUSE_PUBLIC_KEY: ""
+      LANGFUSE_SECRET_KEY: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          prune-cache: false
+      - name: Instalar dependencias
+        run: uv sync --locked
+      - name: Evals soft y juez
+        if: env.LITELLM_API_KEY != ''
+        run: uv run pytest evals -m "eval and slow"
 
   redis:
     runs-on: ubuntu-latest
