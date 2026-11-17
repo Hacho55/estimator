@@ -124,17 +124,21 @@ def latency_vs_tokens(rows: list[dict]) -> str:
     return _table(header, body)
 
 
-def _by_turn(rows: list[dict], scenarios: list[str]) -> dict[str, dict[int, list[dict]]]:
+def _by_turn(rows: list[dict], scenarios: list[str], *, only_ok: bool = True) -> dict[str, dict[int, list[dict]]]:
     grouped: dict[str, dict[int, list[dict]]] = {name: defaultdict(list) for name in scenarios}
-    for row in _ok(rows):
+    for row in _ok(rows) if only_ok else rows:
         if row["scenario"] in grouped and row["attachment_kb"] in ("0", ""):
             grouped[row["scenario"]][int(row["turn_index"])].append(row)
     return grouped
 
 
 def cost_vs_turn(rows: list[dict], scenarios: list[str]) -> str:
-    """Coste acumulado medio por repetición y el coste del turno N frente al del turno 1."""
-    grouped = _by_turn(rows, scenarios)
+    """Coste acumulado de la media de los turnos con precio, y el turno N frente al turno 1.
+
+    Cuenta todos los intentos: un turno que falló no tiene precio y marca con ``?`` ese turno
+    y todos los acumulados siguientes, porque se pagó sin que se sepa cuánto.
+    """
+    grouped = _by_turn(rows, scenarios, only_ok=False)
     turns = sorted({turn for per_turn in grouped.values() for turn in per_turn})
     body = []
     running = {name: 0.0 for name in scenarios}
@@ -146,7 +150,7 @@ def cost_vs_turn(rows: list[dict], scenarios: list[str]) -> str:
             mean, missing = _cost_mean(grouped[name].get(turn, []))
             incomplete[name] |= missing
             if mean is None:
-                cells += ["?", "—"]
+                cells += [_fmt(running[name], 3) + "?", "—"]
                 continue
             running[name] += mean
             ratio = mean / first[name] if first[name] else None
@@ -171,6 +175,74 @@ def drift_vs_turn(rows: list[dict], scenarios: list[str]) -> str:
             cells += [_fmt(_mean(recall) and 100 * _mean(recall), 0) + (" %" if recall else ""), _pct(kept), facts]
         body.append(cells)
     header = ["Turno N", *[f"{name} {label}" for name in scenarios for label in ("recall", "nombre", "hechos")]]
+    return _table(header, body)
+
+
+def hard_failures(rows: list[dict], scenarios: list[str]) -> str:
+    """Turnos que fallaron con 5xx por escenario y en qué tramo de la sesión caen (otros fallos no cuentan)."""
+    body = []
+    for name in scenarios:
+        items = [row for row in rows if row["scenario"] == name]
+        failed = [row for row in items if row["status"].startswith("5")]
+        first_half = [row for row in failed if int(row["turn_index"]) <= 10]
+        kinds = sorted({_error_code(row) for row in failed})
+        body.append(
+            [
+                name,
+                str(len(items)),
+                str(len(failed)),
+                _pct([float(row["status"].startswith("5")) for row in items]),
+                f"{len(first_half)} / {len(failed) - len(first_half)}",
+                ", ".join(kinds) or "—",
+            ]
+        )
+    return _table(["Escenario", "Turnos", "5xx", "Tasa", "Turnos 1–10 / 11–20", "Error"], body)
+
+
+def _error_code(row: dict) -> str:
+    text = row.get("error") or ""
+    return text.split('"error":"', 1)[1].split('"', 1)[0] if '"error":"' in text else row["status"]
+
+
+def drift_causes(rows: list[dict], scenarios: list[str]) -> str:
+    """Separa los hechos perdidos porque su turno falló de los que se perdieron con su turno en 200.
+
+    Un turno que falla no llega al extractor: sus hechos nunca entran en la memoria. Eso es
+    consecuencia del fallo duro, no olvido; el olvido silencioso es la otra columna.
+    """
+    from evals.stress.scenarios import get_scenario
+
+    body = []
+    for name in scenarios:
+        scenario = get_scenario(name)
+        status = {(row["session_id"], int(row["turn_index"])): row["status"] for row in rows if row["scenario"] == name}
+        checked = lost_failed = lost_ok = 0
+        for row in _ok(rows):
+            if row["scenario"] != name or not row["drift_checked"]:
+                continue
+            turn = int(row["turn_index"])
+            failures = {item.split(" (", 1)[0] for item in row["drift_failures"].split("; ") if item}
+            declared = {fact.key: index for index, step in enumerate(scenario.turns[:turn], start=1) for fact in step.facts}
+            for key, index in declared.items():
+                checked += 1
+                if key in failures:
+                    if status.get((row["session_id"], index)) == "200":
+                        lost_ok += 1
+                    else:
+                        lost_failed += 1
+        kept = checked - lost_failed - lost_ok
+        reachable = checked - lost_failed
+        body.append(
+            [
+                name,
+                str(checked),
+                _fmt(checked and 100 * kept / checked, 0) + " %",
+                str(lost_failed),
+                str(lost_ok),
+                _fmt(reachable and 100 * kept / reachable, 0) + " %",
+            ]
+        )
+    header = ["Escenario", "Comprobaciones", "Recall", "Perdidos: su turno falló", "Perdidos: su turno dio 200", "Recall sin los turnos fallidos"]
     return _table(header, body)
 
 
@@ -202,8 +274,11 @@ def attachments(rows: list[dict]) -> str:
 def burst(rows: list[dict]) -> str:
     sequential = [row for row in _ok(rows) if row["turn_index"] == "1" and row["concurrency"] == "1" and row["attachment_kb"] == "0"]
     parallel = [row for row in _ok(rows) if row["scenario"] == "burst"]
+    attempted = [row for row in rows if row["scenario"] == "burst"]
+    level = max((int(row["concurrency"]) for row in attempted), default=0)
+    burst_label = f"Ráfaga ({level} a la vez, {len(attempted) - len(parallel)} fallidos)"
     body = []
-    for label, items in (("Primer turno, en serie", sequential), (f"Ráfaga ({len(parallel)} a la vez)", parallel)):
+    for label, items in (("Primer turno, en serie", sequential), (burst_label, parallel)):
         latency = [_num(row["latency_ms"]) for row in items]
         wall = [_num(row["wall_ms"]) for row in items]
         body.append(
@@ -225,7 +300,8 @@ def render(rows: list[dict]) -> str:
     # El gasto cuenta toda fila con observación, también las inválidas (tier_mismatch): se pagaron.
     paid = [row for row in rows if row.get("tokens_in") not in (None, "")]
     total = sum(_num(row["cost_usd"]) or 0 for row in paid)
-    unknown = sum(1 for row in paid if row["cost_usd"] in (None, ""))
+    # Un 5xx no trae observación, pero pudo pagarse: también es coste desconocido.
+    unknown = sum(1 for row in paid if row["cost_usd"] in (None, "")) + sum(1 for row in errors if row["status"].startswith("5"))
     cost = f"{total:.2f} USD" + (f" conocidos + {unknown} turnos sin precio" if unknown else "")
     parts = [
         "`?`: algún turno sin precio conocido en ese agregado.",
@@ -234,6 +310,8 @@ def render(rows: list[dict]) -> str:
         "## Curva 1 · latencia frente a `tokens_in` (sin aciertos de caché ni ráfaga)\n\n" + latency_vs_tokens(rows),
         "## Curva 2 · coste acumulado frente al turno (sin adjunto, media de repeticiones)\n\n" + cost_vs_turn(rows, multi),
         "## Curva 3 · deriva de memoria frente a N\n\n" + drift_vs_turn(rows, multi),
+        "## Fallos duros\n\n" + hard_failures(rows, multi),
+        "## Causa de la deriva\n\n" + drift_causes(rows, multi),
         "## Adjuntos\n\n" + attachments(rows),
         "## Ráfaga\n\n" + burst(rows),
     ]

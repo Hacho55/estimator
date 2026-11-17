@@ -153,7 +153,7 @@ def test_report_renders_every_table_from_the_csv(client, monkeypatch, tmp_path) 
     run_units(client, units, _settings(), CsvSink(output, resume=False), log=lambda _: None)
 
     text = render(load(output))
-    for title in ("Resumen", "Curva 1", "Curva 2", "Curva 3", "Adjuntos", "Ráfaga"):
+    for title in ("Resumen", "Curva 1", "Curva 2", "Curva 3", "Fallos duros", "Causa de la deriva", "Adjuntos", "Ráfaga"):
         assert f"## {title}" in text
     assert "| pivot | 0 | 3 |" in text
     assert percentile([1, 2, 3, 4], 50) == 2 and percentile([], 95) is None
@@ -169,3 +169,65 @@ def test_a_paid_failure_counts_as_unknown_cost_and_a_fresh_run_resets_the_ledger
     assert output.with_suffix(".discarded.csv").exists()
     CsvSink(output, resume=False)
     assert not output.with_suffix(".discarded.csv").exists()
+
+
+def test_a_server_error_is_measured_and_the_session_goes_on(client, monkeypatch, tmp_path) -> None:
+    calls = {"actor": 0}
+
+    async def complete(messages, response_format, *, name, metadata=None, model=None, estimated_input_tokens=None):
+        if name == "extract-metadata":
+            return _result(json.dumps({"set_project_name": "Orion"}))
+        calls["actor"] += 1
+        result = _result(tier_turn("developer"))
+        if calls["actor"] == 2:
+            result.finish_reason = "length"  # Salida truncada: el estimador responde 502.
+        return result
+
+    _install(monkeypatch, complete)
+    short = Scenario(name="pivot", project_type="mobile_app", detail_level="medium", turns=get_scenario("pivot").turns[:3])
+    output = tmp_path / "results.csv"
+    sink = CsvSink(output, resume=False, allow_unknown_cost=True)  # El 502 se pagó sin precio conocido.
+    run_units(client, [Unit(short, 0, 1)], _settings(), sink, log=lambda _: None)
+    rows = _rows(output)
+    assert [row["status"] for row in rows] == ["200", "502", "200"]
+    # turn_index es el del escenario; el servidor no contó el turno que falló.
+    assert [row["turn_index"] for row in rows] == ["1", "2", "3"]
+    assert [row["session_turn"] for row in rows] == ["1", "", "2"]
+    from evals.stress.report import drift_causes
+
+    # Solo Orion entra en la memoria. req.levels (turno 2, el que falló) cuenta aparte; React, Node y req.panel, en turnos con 200, no.
+    assert "| pivot | 8 | 25 % | 1 | 5 | 29 % |" in drift_causes(rows, ["pivot"])
+    from evals.stress.run import _measured
+
+    assert all(_measured(row) for row in _rows(output))  # Una sesión con un 502 cuenta como completa.
+    assert not _measured({"status": "transport"}) and not _measured({"status": "200", "error": "snapshot: 500"})
+
+
+def test_an_old_header_is_rewritten_by_name_before_appending(tmp_path) -> None:
+    from evals.stress.run import _append
+
+    path = tmp_path / "results.discarded.csv"
+    path.write_text("tier,scenario,turn_index,wall_ms,status\ndeveloper,pivot,2,900,502\n", encoding="utf-8")
+    _append(path, [{"tier": "developer", "scenario": "pivot", "turn_index": 3, "session_turn": 2, "wall_ms": 50, "status": 200}])
+    rows = _rows(path)
+    assert list(rows[0]) == list(COLUMNS)
+    assert [(row["turn_index"], row["wall_ms"], row["status"]) for row in rows] == [("2", "900", "502"), ("3", "50", "200")]
+
+
+def test_report_counts_only_5xx_as_hard_failures_and_keeps_failed_turns_in_the_cost_curve() -> None:
+    from evals.stress.report import burst, cost_vs_turn, hard_failures
+
+    base = {"scenario": "pivot", "attachment_kb": "0", "repeat": "1", "concurrency": "1", "session_id": "s", "error": ""}
+    rows = [
+        {**base, "turn_index": "1", "status": "200", "cost_usd": "0.1"},
+        {**base, "turn_index": "2", "status": "502", "cost_usd": ""},
+        {**base, "turn_index": "3", "status": "422", "cost_usd": ""},
+    ]
+    assert "| pivot | 3 | 1 | 33 % |" in hard_failures(rows, ["pivot"])
+    curve = cost_vs_turn(rows, ["pivot"])
+    assert "| 2 | 0.100? | — |" in curve and "| 3 | 0.100? | — |" in curve  # El fallo marca lo que sigue.
+    burst_rows = [
+        {**base, "scenario": "burst", "turn_index": "1", "concurrency": "3", "status": s, "latency_ms": "1", "wall_ms": "1", "cache_hit_kind": "none"}
+        for s in ("200", "200", "502")
+    ]
+    assert "Ráfaga (3 a la vez, 1 fallidos)" in burst(burst_rows)

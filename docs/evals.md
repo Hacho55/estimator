@@ -114,3 +114,22 @@ el turno 2 y la vista ejecutiva trae rangos calculados por el código (22.500–
 La latencia está muy por encima del objetivo del plan (< 12 s developer, < 25 s pm): el modelo
 genera unos 5.000 tokens de salida para una landing. Antes de ajustar la activación de la
 revisión conviene revisar `LLM_MAX_TOKENS`, la profundidad por defecto y el modelo del actor.
+
+## Stress test del CAG (pre-sesión 6)
+
+Mide dónde empieza a romperse el CAG antes de comparar con RAG: latencia frente a tokens,
+coste acumulado por turno y deriva de la memoria a lo largo de 20 turnos, más adjuntos de
+5–100 KB y una ráfaga concurrente. No optimiza nada: el baseline es el sistema tal cual.
+
+```bash
+uv run python -m evals.stress.run --http http://localhost:8000 --output evals/stress/results.csv
+```
+
+```bash
+uv run python -m evals.stress.report evals/stress/results.csv
+```
+
+El runner necesita el estimador en `AUTH_MODE=jwt` y firma con `STRESS_TOKEN_SECRET` (el
+`AI_SERVICE_SECRET` del servidor); sin `--http` levanta la app en proceso. Cada turno trae su
+`observation` (`turn_observed`, ver `docs/specs/observacion.md`). Resultados y lectura en
+[`evals/stress/REPORT.md`](../evals/stress/REPORT.md).

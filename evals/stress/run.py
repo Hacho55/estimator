@@ -78,6 +78,7 @@ COLUMNS = (
     "repeat",
     "concurrency",
     *OBSERVATION_FIELDS,
+    "session_turn",
     "wall_ms",
     "latency_ok",
     "cost_ok",
@@ -192,7 +193,8 @@ class StopRun(Exception):
 def run_unit(client, unit: Unit, settings: Settings, sink: CsvSink) -> int:
     """Recorre los turnos de una sesión. Cada turno se escribe y se cuenta en cuanto termina.
 
-    Un error (HTTP, transporte o tier distinto del pedido) queda en su fila y corta la sesión.
+    Un 5xx del servidor queda en su fila y la sesión sigue (es una medición del sistema). Un
+    4xx, un fallo de transporte o un tier distinto del pedido quedan en su fila y la cortan.
     Antes de cada turno se comprueba el presupuesto: nunca se paga un turno de más que ya
     se sabía que sobraba.
     """
@@ -225,7 +227,12 @@ def run_unit(client, unit: Unit, settings: Settings, sink: CsvSink) -> int:
         wall_ms = (time.perf_counter() - started) * 1000
         if response.status_code != 200:
             sink.write([_error_row(unit, settings, index, str(response.status_code), response.text, session_id=session_id)])
-            return written + 1
+            written += 1
+            if response.status_code >= 500:
+                # Fallo del sistema (p. ej. salida truncada): es una medición. El turno no entra en
+                # el historial y la sesión sigue, como seguiría un usuario.
+                continue
+            return written
         body = response.json()
         snapshot, snapshot_error = _snapshot(client, session_id, headers)
         row = _row(unit, index, body, snapshot, wall_ms, settings)
@@ -278,7 +285,9 @@ def _row(unit: Unit, index: int, body: dict, snapshot: dict | None, wall_ms: flo
         "error": "",
     }
     row["tools_used"] = ",".join(observation.get("tools_used") or [])
-    row["turn_index"] = observation.get("turn_index") or index
+    # turn_index es el turno del escenario; el servidor no cuenta los turnos que fallaron.
+    row["turn_index"] = index
+    row["session_turn"] = observation.get("turn_index")
     if snapshot is not None:
         drift = drift_for_turn(unit.scenario, index, snapshot, answer)
         row |= {
@@ -314,6 +323,11 @@ def _error_row(unit: Unit, settings: Settings, index: int, status: str, text: st
 
 
 # --- CSV, gasto y orquestación ------------------------------------------------------
+
+
+def _measured(row: dict) -> bool:
+    status = str(row.get("status"))
+    return (status == "200" and not row.get("error")) or status.startswith("5")
 
 
 def _unit_key(row: dict) -> tuple[str, str, str, str]:
@@ -359,8 +373,8 @@ class CsvSink:
             self.done = {
                 key
                 for key, items in by_unit.items()
-                # Completa = todos los turnos con estimación y medición (sin error de snapshot).
-                if all(item["status"] == "200" and not item["error"] for item in items) and len(items) == expected.get(key[0], -1)
+                # Completa = todos los turnos medidos: 200 sin error de snapshot, o un 5xx del sistema.
+                if all(_measured(item) for item in items) and len(items) == expected.get(key[0], -1)
             }
             dropped = [row for row in rows if _unit_key(row) not in self.done]
             if dropped:
@@ -408,6 +422,14 @@ class CsvSink:
 
 def _append(path: Path, rows: list[dict]) -> None:
     exists = path.is_file() and path.stat().st_size > 0
+    if exists:
+        with path.open(newline="", encoding="utf-8") as handle:
+            header = next(csv.reader(handle), [])
+        if tuple(header) != COLUMNS:
+            # Cabecera de otra versión del runner: se reescribe por nombre de columna, sin desplazar campos.
+            rows = [*_read_rows(path), *rows]
+            exists = False
+            path.unlink()
     with path.open("a", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=COLUMNS, extrasaction="ignore")
         if not exists:

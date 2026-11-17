@@ -115,6 +115,19 @@ proyecto. Entre paréntesis, la sesión de origen.
 - **El golden dataset lleva sus criterios de éxito y se revisa cada trimestre** (5). Por qué:
   una lista de entradas sin criterios no evalúa nada y el tráfico real cambia. Mientras un caso
   sea borrador, sus umbrales avisan pero no bloquean. Cuándo no: no hay excepción.
+- **Los presupuestos de latencia y coste son tests, no dashboards** (pre-6). Por qué: un SLA
+  escrito como métrica con umbral (`LatencyBudgetMetric`, `CostBudgetMetric`) da un porcentaje
+  en cumplimiento por escenario, y un coste desconocido no cumple, porque no es gratis.
+  Cuándo no: sin un SLA acordado, el umbral es arbitrario; primero se mide.
+- **Un fallo duro aguas arriba se convierte en degradación silenciosa aguas abajo** (pre-6).
+  Por qué: en el stress test, un 502 por salida truncada se salta el extractor, los hechos de
+  ese turno no entran en la memoria y la sesión sigue con el estado viejo (React tras el
+  pivote). Toda la deriva medida venía de ahí, no del olvido. Hay que atribuir cada pérdida a
+  su causa antes de culpar a la memoria. Cuándo no: flujos de un solo turno.
+- **Las tres curvas del stress test se leen contra la variable que de verdad empuja** (pre-6).
+  Por qué: la latencia y el coste siguieron a `tokens_out` (r = 0,55 y 0,87), no a `tokens_in`,
+  que la ventana acota. Una curva plana frente a `tokens_in` no es una buena noticia si la salida
+  es la que se rompe. Cuándo no: modelos con salida corta y fija, donde manda la entrada.
 - **Observabilidad desde el día uno** (3). Por qué: sin trazas ni scores no se itera con datos.
   Cuándo no: no hay excepción.
 
