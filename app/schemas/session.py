@@ -40,6 +40,12 @@ class ProjectMetadata(BaseModel):
             and not self.rejected_options
         )
 
+    def fact_count(self) -> int:
+        """Hechos guardados: cada campo escalar presente y cada elemento de las listas."""
+        scalars = [self.project_name, self.assumed_team_size, self.agreed_scope]
+        lists = [self.mentioned_technologies, self.explicit_constraints, self.rejected_options]
+        return sum(value is not None and value != "" for value in scalars) + sum(len(items) for items in lists)
+
     def as_prompt_block(self) -> str:
         """Bloque en JSON para la plantilla ``v3``. ``v4`` renderiza campo a campo."""
         if self.is_empty():
@@ -135,6 +141,46 @@ class SessionState(BaseModel):
     archived_at: datetime | None = None
 
 
+class TurnObservation(BaseModel):
+    """Telemetría de un turno de sesión en un solo evento (``turn_observed``).
+
+    Los 13 primeros campos son los del ejercicio de stress de la sesión 6. Dos cambian de
+    significado porque ``/sessions`` no tiene anclas ni summary (ADR 0002): lo que sobrevive a
+    la ventana es la memoria.
+
+    - ``anchors_count``: hechos guardados en la memoria (``ProjectMetadata.fact_count``).
+    - ``summary_chars``: caracteres del bloque de memoria que viajó en el system.
+
+    ``latency_ms``, ``cost_usd`` y los tokens suman todo el turno: investigación, actor (con
+    sus reintentos de revisión) y extractor de memoria. El desglose va en los campos extra.
+    ``cost_usd`` es ``None`` si algún modelo no tiene precio: desconocido no es gratis.
+    """
+
+    turn_index: int = Field(ge=1)
+    session_id: str
+    enriched_transcript_chars: int = Field(ge=0)  # Transcripción + texto extraído de los adjuntos.
+    attachments_total_chars: int = Field(ge=0)  # Tras el truncado; 0 sin adjuntos.
+    messages_in_window: int = Field(ge=0)  # Mensajes de historial que entraron al prompt.
+    anchors_count: int = Field(ge=0)
+    summary_chars: int = Field(ge=0)
+    tokens_in: int = Field(ge=0)
+    tokens_out: int = Field(ge=0)
+    cost_usd: float | None = Field(default=None, ge=0)  # None: algún modelo sin precio conocido.
+    latency_ms: float = Field(ge=0)
+    cache_hit_kind: Literal["none", "exact", "semantic"] = "none"
+    last_resolved_tier: str | None = None
+    # Extras: lo que hace falta para leer las curvas sin otro evento.
+    kind: str
+    attachments_truncated: bool = False
+    dropped_turns: int = Field(default=0, ge=0)
+    cached_tokens: int = Field(default=0, ge=0)
+    estimate_ms: float = Field(default=0, ge=0)  # Investigación + actor (con sus vueltas) + revisión.
+    extractor_ms: float = Field(default=0, ge=0)
+    tools_used: list[str] = Field(default_factory=list)
+    review_decision: str | None = None
+    actor_calls: int = Field(default=1, ge=0)  # 0 si la respuesta salió de la caché.
+
+
 class SessionEstimateResponse(BaseModel):
     session_id: str
     project_metadata: ProjectMetadata
@@ -159,3 +205,4 @@ class SessionEstimateResponse(BaseModel):
     cache_kind: str | None = None
     cache_similarity: float | None = None
     trace_id: str | None = None
+    observation: TurnObservation | None = None  # Telemetría del turno (stress test, sesión 6).

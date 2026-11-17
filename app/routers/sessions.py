@@ -21,6 +21,7 @@ from app.schemas.session import (
     SessionCreateRequest,
     SessionEstimateResponse,
     SessionState,
+    TurnObservation,
 )
 from app.security.caller import CallerContext, get_caller
 from app.services.errors import AttachmentRejectedError, InputRejectedError
@@ -171,7 +172,11 @@ async def estimate_session(
         session.turns = turn_number
         store.touch(session)
         warnings = [*result.warnings, *_attachment_warnings(attachment_items)]
-        return _response(session.id, session.metadata, changes, extraction, result, attachment_items, warnings)
+        response = _response(session.id, session.metadata, changes, extraction, result, attachment_items, warnings)
+        response.observation = _observe(session, text, attachment_items, extraction, result, response)
+        # Un evento por turno con todo junto: el CSV del stress test sale de una pasada.
+        log.info("turn_observed", **response.observation.model_dump())
+        return response
 
 
 def _bounded_transcript(transcript: str, *, first_turn: bool, attached_chars: int = 0) -> str:
@@ -335,6 +340,43 @@ def _response(
         cache_kind=result.cache_kind,
         cache_similarity=result.cache_similarity,
         trace_id=result.trace_id,
+    )
+
+
+def _observe(
+    session,
+    text: str,
+    attachments: list[ExtractedAttachment],
+    extraction,
+    result,
+    response: SessionEstimateResponse,
+) -> TurnObservation:
+    """La telemetría del turno, con la memoria ya fusionada (ver ``TurnObservation``)."""
+    attached = sum(item.chars for item in attachments)
+    review = result.review
+    return TurnObservation(
+        turn_index=session.turns,
+        session_id=session.id,
+        enriched_transcript_chars=len(text) + attached,
+        attachments_total_chars=attached,
+        messages_in_window=result.history_messages,
+        anchors_count=session.metadata.fact_count(),
+        summary_chars=result.memory_chars,
+        tokens_in=response.usage.input_tokens,
+        tokens_out=response.usage.output_tokens,
+        cost_usd=response.cost_usd,
+        latency_ms=response.latency_ms,
+        cache_hit_kind=result.cache_kind if result.cache_kind in ("exact", "semantic") else "none",
+        last_resolved_tier=session.last_tier,
+        kind=result.kind,
+        attachments_truncated=any(item.truncated for item in attachments),
+        dropped_turns=result.dropped_turns,
+        cached_tokens=response.usage.cached_tokens,
+        estimate_ms=result.latency_ms,
+        extractor_ms=extraction.latency_ms,
+        tools_used=[item["tool"] for item in result.tools],
+        review_decision=str(review.decision) if review else None,
+        actor_calls=0 if result.cache_hit else (review.actor_calls if review else 1),
     )
 
 

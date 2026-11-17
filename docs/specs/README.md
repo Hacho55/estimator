@@ -13,3 +13,4 @@ página en el mismo commit. Los que dependen del modelo real están en `evals/`.
 | Herramientas | [herramientas.md](herramientas.md) |
 | Revisión Actor-Critic-Boss | [revision.md](revision.md) |
 | Evaluación | [evaluacion.md](evaluacion.md) |
+| Observación por turno | [observacion.md](observacion.md) |

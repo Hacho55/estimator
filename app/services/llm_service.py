@@ -69,6 +69,7 @@ from app.services.prompt_builder import (
     ensure_alternation,
     prompt_version,
     repair_instruction,
+    strip_memory,
     system_text_of,
 )
 from app.services.research import ResearchOutcome, run_research
@@ -178,6 +179,8 @@ class TurnResult:
     cache_similarity: float | None = None
     finish_reason: str | None = None
     dropped_turns: int = 0
+    history_messages: int = 0  # Mensajes de historial que entraron al prompt tras el recorte.
+    memory_chars: int = 0  # Caracteres del bloque de memoria que viajó en el system.
     repairs: int = 0
     scrubbed_input: str = ""
     tier: str | None = None
@@ -1082,6 +1085,8 @@ async def _assemble(first: llm_client.LLMResult, prepared: _Prepared, *, transcr
         cache_similarity=prepared.cache_similarity if cached is not None else None,
         finish_reason=answered.finish_reason,
         dropped_turns=dropped,
+        history_messages=len(prepared.history),
+        memory_chars=_memory_chars(messages),
         repairs=repairs,
         scrubbed_input=transcription,
         tier=prepared.tier,
@@ -1160,6 +1165,14 @@ def _history_that_fits(transcription, block, history, overrides, model):
     if overrides.session_window:
         return slide_history(history, room_tokens=max(room, 0))
     return select_history(history, max_turns=settings.CONVERSATION_MAX_TURNS, room_tokens=max(room, 0))
+
+
+def _memory_chars(messages: list[dict]) -> int:
+    """Tamaño del bloque de memoria del system (el segmento final, fuera de la caché)."""
+    if not messages or messages[0].get("role") != "system":
+        return 0
+    text = system_text_of(messages)
+    return len(text) - len(strip_memory(text))
 
 
 def _text_of(content) -> str:
