@@ -4,6 +4,11 @@ Ejercicio previo a la sesión 6: **medir dónde se rompe el CAG antes de añadir
 optimiza nada. Prompts, ventana, límites y modelos son los de la sesión 5, y el resultado es el
 baseline contra el que se comparará RAG. Plan y decisiones: [`docs/plan-pre-session-6.md`](../../docs/plan-pre-session-6.md).
 
+Hay **dos corridas**. La primera rompió el sistema, pero por la longitud de la salida, que RAG
+no arregla. La segunda ([más abajo](#segunda-corrida-el-contexto-al-límite)) fuerza lo que sí
+justificaría RAG: un contexto de entrada de hasta 230 k tokens y un corpus de referencia de
+hasta 400 estimaciones. **La conclusión que vale para la sesión 6 es la de la segunda corrida.**
+
 ## Parámetros de la corrida
 
 | Parámetro | Valor |
@@ -193,3 +198,170 @@ Filas: 160 (59 con error). Coste total: 5.90 USD conocidos + 59 turnos sin preci
 |---|---:|---:|---:|---:|---:|
 | Primer turno, en serie | 9 | 44.1 | 47.1 | 47.2 | 0 % |
 | Ráfaga (10 a la vez, 1 fallidos) | 9 | 47.4 | 54.7 | 54.7 | 0 % |
+
+---
+
+## Segunda corrida: el contexto al límite
+
+Plan: [`docs/plan-pre-session-6.md`](../../docs/plan-pre-session-6.md), §6. Datos:
+[`results_context_a.csv`](results_context_a.csv) (A, por sesiones) y
+[`results_context.csv`](results_context.csv) (B y C). Tablas:
+`uv run python -m evals.stress.context_report`.
+
+### Parámetros
+
+| Bloque | Qué se forzó | Variante (solo en el runner, en proceso) |
+|---|---|---|
+| A | `pivot` con 8 k y con 16 k tokens de salida | `LLM_MAX_TOKENS`, `LLM_TIMEOUT_SECONDS=300`; herramientas como en la primera corrida |
+| B1 | Pliego de 50 a 1.000 KB con 9 requisitos del 10 al 90 % | Tope de adjuntos subido a 1.000.000 caracteres; guarda de ventana tal cual (128 k) |
+| B2 | Los tamaños que B1 rechaza | Además, `MODEL_CONTEXT_WINDOW=1.000.000` para llegar al proveedor |
+| C | Corpus de 5 a 400 estimaciones con una aguja al principio, en medio o al final | Sin herramientas; modo **tal cual** (7 ejemplos, 6.000 tokens) y modo **sin topes** |
+
+- Todas las variantes llevan `LLM_MAX_TOKENS=16000`, sin reintentos y con la caché semántica apagada.
+- La caché de respuestas se borra antes de cada llamada.
+- **Gasto:** 21,59 USD con precio conocido, más 15 turnos truncados de A sin precio, unos 2–3 USD más estimados.
+  - El plan preveía 17–20 USD. La diferencia es haber ampliado B hasta 1.000 KB, después de ver que 300 KB solo eran 70 k tokens.
+  - El tope de 30 USD se respetó.
+
+**Umbrales de viabilidad.** Se fijaron antes de correr, y los de latencia (25 s) y coste
+(0,05 USD) **ya los incumple la línea base**: el control de C tarda unos 45 s y cuesta unos
+0,07 USD. La columna "¿Viable?" queda dominada por eso. Lo que de verdad discrimina es el
+**coste relativo** a la línea base y la **selección** del ejemplo pertinente, y la lectura se
+apoya en esas dos cosas.
+
+### Lectura
+
+**1. El contexto de entrada no rompe la calidad, ni siquiera a 230 k tokens.**
+- **Recall:** en B los 9 requisitos se citaron en las 30 respuestas, en todas las posiciones y en todos los tamaños hasta 1.000 KB (230 k tokens). No aparece "perdido en el medio".
+- **Latencia:** plana, de 38 a 48 s, porque la sigue dictando la salida.
+- **Coste:** sube en línea recta, de 0,107 USD con 14 k tokens a 0,838 USD con 230 k. El coste del turno (actor y extractor) crece unos 3,4 USD por cada millón de tokens de entrada del actor, contados con la estimación del presupuesto.
+- **Truncado residual a 1.000 KB:** el pliego se cortó en 995.846 caracteres, detrás del requisito del 90 %. Los 9 requisitos seguían visibles.
+- **El primer fallo duro es nuestra propia guarda.** Con 500 KB (116 k tokens) el estimador responde 413 `context_budget_exceeded` antes de llamar al modelo y sin coste. El proveedor aceptó los 230 k tokens.
+- **Límite del método:** el relleno del pliego sintético es repetitivo y los requisitos destacan ("REQUISITO OBLIGATORIO"). Es más fácil que un pliego real con requisitos parecidos entre sí, así que esto es una cota optimista de la recuperación, no una prueba de que no se pierda nada.
+
+**2. El CAG tal cual pierde el ejemplo pertinente en silencio en cuanto el corpus pasa de 7.**
+- **Por qué:** `build_context_block` se queda con los 7 primeros **por orden de la lista**; la transcripción no elige ejemplos.
+- **Qué pasa con la aguja:** con 50 y con 200 estimaciones, la aguja solo entra si es la primera. En medio o al final queda fuera, no se cita, y la estimación se queda en 535–860 horas.
+  - Con la aguja dentro salen 1.450–1.960 horas.
+  - El control sin aguja da 745–955 horas, y la aguja lleva 1.550.
+- **No hay error ni aviso.** El dry-run lo confirma sin coste: la aguja queda fuera para cualquier N ≥ 25 salvo en la primera posición.
+- **Este es el caso que justifica RAG:** con más de 7 proyectos históricos, que el pertinente llegue al prompt depende del orden de la lista, no de su relevancia.
+
+**3. Sin topes, el modelo encuentra la aguja, pero el coste crece con el corpus.**
+- **Recuperación:** con el corpus entero en el prompt, la aguja se citó en 37 de 38 llamadas hasta 400 estimaciones (108 k tokens). El único fallo, en N = 25, no se repitió en dos repeticiones más.
+- **Influencia:** la aguja mueve la estimación entre un +69 % y un +120 % frente al control emparejado.
+- **Coste:** en frío se multiplica por 10,3 entre N = 5 (0,053 USD) y N = 400 (0,544 USD).
+- **Latencia:** la mediana en frío va de 27 a 52 s, sin una tendencia clara a partir de N = 100.
+- **Caché del prefijo:** es la defensa del CAG. Con acierto, la llamada a N = 400 bajó a 0,084 USD (6,5 veces menos). Pero el proveedor solo sirvió la caché en 7 de las 18 llamadas calientes, y la mediana caliente a N = 400 fue 0,540 USD, casi la de frío.
+- **Contrafactual de RAG.** Un RAG que recupere 5 ejemplos llevaría un contexto parecido al de N = 5, unos 0,05 USD por llamada sea cual sea el corpus.
+  - Es una **estimación con los precios medidos, no una medición**.
+  - No incluye el coste de la recuperación ni su recall, que podría fallar donde aquí el modelo no falló.
+
+**4. La salida sigue rompiendo, y RAG no lo arregla.**
+- **A:** con 16 k tokens de salida, los turnos truncados bajan de 9 a 6 de 20, pero la salida del turno (actor y extractor) crece hasta 16,5 k tokens. El modelo escribe más cuando puede: es un problema de diseño de la salida del tier `developer`, no del contexto.
+- **Memoria:**
+  - Con 8 k, la memoria conservó el 100 % de lo que le llegó, igual que en la primera corrida.
+  - Con 16 k apareció el primer olvido silencioso real: el extractor no capturó "sin conexión" en el turno 9, un turno que respondió bien. Retención del 93 % sobre los turnos con 200.
+
+**Dónde está el límite del CAG, en una frase.** No está en la capacidad: el modelo lee 230 k tokens y encuentra lo que busca. Está en **elegir qué entra y pagar por ello**.
+- Con los topes de producción, el ejemplo pertinente queda fuera en silencio a partir de 8 estimaciones.
+- Sin topes, cada turno cuesta proporcional al corpus: 10 veces más a 400 estimaciones, y la caché que lo abarata solo se aplicó en 7 de 18 llamadas.
+- Las dos cosas son lo que RAG resuelve: seleccionar por relevancia con un presupuesto fijo.
+- Lo que RAG **no** resuelve, y hay que medir aparte en la sesión 6, es la salida truncada.
+
+**Diferencias con la primera corrida que hay que tener en cuenta.**
+- La segunda corre en proceso y no contra el servidor. Allí Presidio no encontró el modelo en español y el guardrail usó el patrón de respaldo.
+- No cambia nada de lo que se mide aquí, porque los marcadores y la aguja no llevan datos personales.
+
+### Tablas de la segunda corrida
+
+#### A · Atribución del truncado (`pivot`, 8 k frente a 16 k de salida)
+
+| Variante | Turnos | Fallos | P50 s | Máx. `tokens_out` | USD conocidos | Recall medio | Recall en el turno 20 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| A8 | 20 | 9 llm_output_truncated | 23.4 | 8,429 | 0.60 | 58 % | 27 % |
+| A16 | 20 | 6 llm_output_truncated | 30.1 | 16,484 | 1.47 | 82 % | 53 % |
+
+Causa de la deriva, A16:
+
+| Escenario | Comprobaciones | Recall | Perdidos: su turno falló | Perdidos: su turno dio 200 | Recall sin los turnos fallidos |
+|---|---:|---:|---:|---:|---:|
+| pivot | 129 | 74 % | 26 | 7 | 93 % |
+
+Causa de la deriva, A8:
+
+| Escenario | Comprobaciones | Recall | Perdidos: su turno falló | Perdidos: su turno dio 200 | Recall sin los turnos fallidos |
+|---|---:|---:|---:|---:|---:|
+| pivot | 104 | 43 % | 59 | 0 | 100 % |
+
+#### B · Contexto de entrada (pliegos de 50 a 1.000 KB)
+
+| Variante | KB | Resultado | Tokens del actor | P50 s | USD (mediana) | Visibles | Recall respuesta | Recall memoria | ¿Viable? |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| B1 | 50 | 3 200 | 14,195 | 40.9 | 0.107 | 9 / 9 | 100 % | 33 % | no: latencia, coste |
+| B1 | 100 | 3 200 | 25,501 | 37.3 | 0.146 | 9 / 9 | 100 % | 33 % | no: latencia, coste |
+| B1 | 150 | 3 200 | 36,810 | 40.9 | 0.187 | 9 / 9 | 100 % | — | no: latencia, coste |
+| B1 | 200 | 3 200 | 48,111 | 41.1 | 0.227 | 9 / 9 | 100 % | — | no: latencia, coste |
+| B1 | 250 | 3 200 | 59,421 | 44.5 | 0.254 | 9 / 9 | 100 % | — | no: latencia, coste |
+| B1 | 300 | 3 200 | 70,725 | 38.4 | 0.304 | 9 / 9 | 100 % | — | no: latencia, coste |
+| B1 | 400 | 3 200 | 93,341 | 38.9 | 0.378 | 9 / 9 | 100 % | — | no: latencia, coste |
+| B1 | 500 | 3 local | 116,079 | — | — | 9 / 9 | — | — | no: fallo duro |
+| B1 | 750 | 3 local | 173,450 | — | — | 9 / 9 | — | — | no: fallo duro |
+| B1 | 1000 | 3 local | 230,149 | — | — | 9 / 9 | — | — | no: fallo duro |
+| B2 | 500 | 3 200 | 116,079 | 38.9 | 0.448 | 9 / 9 | 100 % | — | no: latencia, coste |
+| B2 | 750 | 3 200 | 173,450 | 40.6 | 0.642 | 9 / 9 | 100 % | — | no: latencia, coste |
+| B2 | 1000 | 3 200 | 230,149 | 48.5 | 0.838 | 9 / 9 | 100 % | — | no: latencia, coste |
+
+Requisitos citados por posición en el pliego (citados / visibles):
+
+| Variante | KB | 10 % | 20 % | 30 % | 40 % | 50 % | 60 % | 70 % | 80 % | 90 % |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| B1 | 50 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 |
+| B1 | 100 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 |
+| B1 | 150 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 |
+| B1 | 200 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 |
+| B1 | 250 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 |
+| B1 | 300 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 |
+| B1 | 400 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 |
+| B2 | 500 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 |
+| B2 | 750 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 |
+| B2 | 1000 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 |
+
+#### C · Corpus del CAG (aguja entre N estimaciones)
+
+Control sin aguja (N = 5, 3 repeticiones): 775.0, 955.0, 745.0 horas. Aguja: 1550 horas.
+
+Modo **tal cual** (topes por defecto, 7 ejemplos por orden de la lista):
+
+| N | Aguja | ¿Entra? | ¿Citada? | Horas | Tokens de contexto |
+|---|---:|---:|---:|---:|---:|
+| 50 | end | no | no | 725.0 | 1,817 |
+| 50 | middle | no | no | 535.0 | 1,816 |
+| 50 | start | sí | sí | 1450.0 | 1,879 |
+| 200 | end | no | no | 695.0 | 1,817 |
+| 200 | middle | no | no | 860.0 | 1,815 |
+| 200 | start | sí | sí | 1960.0 | 1,878 |
+
+Modo **sin topes** (todo el corpus en el prompt):
+
+| N | Tokens de contexto | Tokens del actor | P50 s frío | P50 s caliente | USD frío | Frío vs N mínimo | USD caliente | Aciertos de caché | USD con acierto | Aguja citada | Horas vs control | Fallos | ¿Viable? |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 5 | 1,326 | 2,524 | 27.3 | 36.9 | 0.053 | 1.0× | 0.067 | 1/3 | 0.034 | 6/6 | 98 % | 0 | no: latencia, coste |
+| 25 | 6,741 | 7,939 | 40.1 | 42.7 | 0.093 | 1.8× | 0.097 | 0/3 | — | 7/8 | 92 % | 0 | no: latencia, coste |
+| 50 | 13,407 | 14,605 | 32.7 | 41.8 | 0.114 | 2.2× | 0.063 | 2/3 | 0.061 | 6/6 | 92 % | 0 | no: latencia, coste |
+| 100 | 26,698 | 27,896 | 47.4 | 45.0 | 0.190 | 3.6× | 0.187 | 1/3 | 0.068 | 6/6 | 85 % | 0 | no: latencia, coste |
+| 200 | 53,315 | 54,513 | 52.3 | 41.1 | 0.319 | 6.0× | 0.080 | 2/3 | 0.072 | 6/6 | 69 % | 0 | no: latencia, coste |
+| 400 | 106,663 | 107,861 | 46.4 | 43.2 | 0.544 | 10.3× | 0.540 | 1/3 | 0.084 | 6/6 | 120 % | 0 | no: latencia, coste |
+
+Aguja citada por posición (sin topes, frío y caliente juntos):
+
+| N | Principio | Medio | Final |
+|---|---:|---:|---:|
+| 5 | 2/2 | 2/2 | 2/2 |
+| 25 | 2/2 | 3/4 | 2/2 |
+| 50 | 2/2 | 2/2 | 2/2 |
+| 100 | 2/2 | 2/2 | 2/2 |
+| 200 | 2/2 | 2/2 | 2/2 |
+| 400 | 2/2 | 2/2 | 2/2 |
+
+Gasto conocido de la segunda corrida: 21.59 USD; llamadas pagadas sin precio: 15.

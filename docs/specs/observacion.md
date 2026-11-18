@@ -26,3 +26,13 @@ Un turno de `/sessions` deja **un único evento** `turn_observed` y lo devuelve 
 | un turno no tiene coste conocido | la corrida se para salvo `--allow-unknown-cost` | `tests/test_stress_runner.py::test_unknown_cost_stops_the_run_unless_allowed` |
 | el servidor resuelve otro tier que el pedido | la fila queda como `tier_mismatch` y la sesión se corta | `tests/test_stress_runner.py::test_a_tier_other_than_requested_invalidates_the_row` |
 | falla `GET /sessions/{id}` | la deriva queda vacía con el error, no como memoria perdida | `tests/test_stress_runner.py::test_failed_snapshot_leaves_drift_empty_instead_of_lost` |
+
+## Segunda corrida: el contexto al límite (`evals/stress/context_run.py`)
+
+| Cuando… | Entonces… | Test |
+|---|---|---|
+| el corpus del CAG crece por encima de `CONTEXT_MAX_EXAMPLES` | entran los primeros por orden de la lista, no los pertinentes; sin topes entra todo | `tests/test_stress_context.py::test_custom_corpus_reaches_the_cag_block_with_and_without_caps` |
+| se mueve la aguja de posición | los distractores no cambian; el control es el mismo corpus sin aguja | `tests/test_stress_context.py::test_corpus_has_the_size_and_moves_only_the_needle` |
+| se corre el bloque C | el control sin aguja fija las horas de la aguja y cada fila dice si entró y si se citó | `tests/test_stress_context.py::test_block_c_calibrates_the_needle_on_the_control_and_resumes` |
+| se corre el bloque B | el recall se mide sobre la respuesta con denominador en los marcadores que el actor pudo ver; la observación trae `actor_input_tokens` | `tests/test_stress_context.py::test_block_b_measures_recall_over_the_markers_the_actor_could_see` |
+| la petición no cabe en la ventana configurada | rechazo local (413), sin coste; un timeout o un 5xx sí cuentan como posible gasto | `tests/test_stress_context.py::test_a_local_rejection_is_not_counted_as_paid` |

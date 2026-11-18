@@ -73,6 +73,7 @@ OBSERVATION_FIELDS = (
 )
 COLUMNS = (
     "tier",
+    "variant",
     "scenario",
     "attachment_kb",
     "repeat",
@@ -184,6 +185,7 @@ class Settings:
     latency: LatencyBudgetMetric
     cost: CostBudgetMetric
     pdfs: dict[int, Path]
+    variant: str = ""  # Segunda corrida: preset de topes (``--set``), escrito en cada fila.
 
 
 class StopRun(Exception):
@@ -273,6 +275,7 @@ def _row(unit: Unit, index: int, body: dict, snapshot: dict | None, wall_ms: flo
     answer = _answer_text(body)
     row: dict[str, Any] = {
         "tier": settings.tier,
+        "variant": settings.variant,
         "scenario": unit.scenario.name,
         "attachment_kb": unit.attachment_kb,
         "repeat": unit.repeat,
@@ -311,6 +314,7 @@ def _row(unit: Unit, index: int, body: dict, snapshot: dict | None, wall_ms: flo
 def _error_row(unit: Unit, settings: Settings, index: int, status: str, text: str, *, session_id: str = "") -> dict:
     return {
         "tier": settings.tier,
+        "variant": settings.variant,
         "scenario": unit.scenario.name,
         "attachment_kb": unit.attachment_kb,
         "repeat": unit.repeat,
@@ -330,8 +334,8 @@ def _measured(row: dict) -> bool:
     return (status == "200" and not row.get("error")) or status.startswith("5")
 
 
-def _unit_key(row: dict) -> tuple[str, str, str, str]:
-    return (row["scenario"], str(row["attachment_kb"]), str(row["repeat"]), str(row["concurrency"]))
+def _unit_key(row: dict) -> tuple[str, str, str, str, str]:
+    return (row.get("variant") or "", row["scenario"], str(row["attachment_kb"]), str(row["repeat"]), str(row["concurrency"]))
 
 
 class CsvSink:
@@ -357,7 +361,7 @@ class CsvSink:
         self.lock = threading.Lock()
         self.max_usd = max_usd
         self.allow_unknown_cost = allow_unknown_cost
-        self.done: set[tuple[str, str, str, str]] = set()
+        self.done: set[tuple[str, str, str, str, str]] = set()
         self.spent = 0.0
         self.unknown_cost = 0
         self.written = 0  # Filas nuevas de esta corrida.
@@ -367,14 +371,14 @@ class CsvSink:
             if rows and other:
                 raise SystemExit(f"{path} tiene filas de otro tier ({', '.join(sorted(map(str, other)))}); usa otra salida.")
             expected = _expected_turns()
-            by_unit: dict[tuple[str, str, str, str], list[dict]] = {}
+            by_unit: dict[tuple[str, str, str, str, str], list[dict]] = {}
             for row in rows:
                 by_unit.setdefault(_unit_key(row), []).append(row)
             self.done = {
                 key
                 for key, items in by_unit.items()
                 # Completa = todos los turnos medidos: 200 sin error de snapshot, o un 5xx del sistema.
-                if all(_measured(item) for item in items) and len(items) == expected.get(key[0], -1)
+                if all(_measured(item) for item in items) and len(items) == expected.get(key[1], -1)
             }
             dropped = [row for row in rows if _unit_key(row) not in self.done]
             if dropped:
@@ -456,7 +460,11 @@ def run_units(client, units: list[Unit], settings: Settings, sink: CsvSink, *, l
     La ráfaga comprueba el tope antes de lanzarse; sus N turnos van a la vez, así que puede
     pasarse como mucho en N turnos (acotado por ``--burst-sessions``).
     """
-    pending = [unit for unit in units if (unit.scenario.name, str(unit.attachment_kb), str(unit.repeat), str(unit.concurrency)) not in sink.done]
+    pending = [
+        unit
+        for unit in units
+        if (settings.variant, unit.scenario.name, str(unit.attachment_kb), str(unit.repeat), str(unit.concurrency)) not in sink.done
+    ]
     before = sink.written
     sequential = [unit for unit in pending if unit.concurrency == 1]
     burst = [unit for unit in pending if unit.concurrency > 1]
@@ -497,11 +505,24 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--allow-unknown-cost", action="store_true", help="Sigue aunque un turno no tenga precio.")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--resume", action="store_true", help="Conserva las unidades completas del CSV.")
+    parser.add_argument("--variant", default="", help="Nombre del preset de topes; va en cada fila.")
+    parser.add_argument(
+        "--set",
+        action="append",
+        default=[],
+        metavar="CLAVE=VALOR",
+        help="Tope de la variante (solo en proceso), p. ej. LLM_MAX_TOKENS=16000. Repetible.",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
+    if args.set and args.http:
+        raise SystemExit("--set solo vale en proceso: contra --http los topes son los del servidor.")
+    for item in args.set:
+        key, _, value = item.partition("=")
+        os.environ[key.strip()] = value.strip()  # Variante de experimento: no toca .env ni los defaults.
     if not args.http:
         # En proceso: el canal real del tier con un secreto propio, siempre (con AUTH_MODE=off el
         # token se ignoraría y se mediría DEFAULT_TIER). Las cachés quedan como en la app (D22).
@@ -529,6 +550,7 @@ def main(argv: list[str] | None = None) -> int:
         latency=LatencyBudgetMetric(args.latency_budget_ms),
         cost=CostBudgetMetric(args.cost_budget_usd),
         pdfs=ensure_pdfs(tuple(size for size in sizes if size > 0)),
+        variant=args.variant,
     )
     turns = sum(len(unit.scenario.turns) for unit in units)
     print(f"{len(units)} sesiones, {turns} turnos previstos, tier {args.tier}, salida {args.output}")

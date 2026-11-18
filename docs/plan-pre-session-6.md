@@ -192,3 +192,194 @@ baseline.
 | Herramientas externas (Tavily, backend de negocio) añaden ruido de red | Se registra `tools_used`. El backend de negocio debe estar levantado. Tavily solo si el turno lo pide |
 | El acierto de caché exacta en los repeats sesga el P50 | El informe separa las latencias con y sin aciertos |
 | Memoria llena (`MAX_LIST_ITEMS`) en `growing` | No es un riesgo, es un hallazgo: se reporta |
+
+---
+
+## 6. Segunda corrida · llevar el contexto al límite
+
+### Por qué
+
+La primera corrida rompió el sistema, pero por la salida: el 37 % de turnos con 502
+`llm_output_truncated`, que RAG no arregla. Lo que justificaría RAG quedó sin medir, porque
+nuestros propios topes acotaron la entrada a unos 37 k tokens:
+
+- **Contexto de entrada.** El tope de adjuntos (`ATTACHMENT_MAX_CHARS=40.000`) y la ventana de
+  6 turnos dejan la entrada lejos de la ventana configurada (`MODEL_CONTEXT_WINDOW=128.000`).
+  La curva de latencia frente a `tokens_in` salió plana porque el rango era estrecho.
+- **Corpus del CAG.** Las tarifas y los 5 ejemplos históricos (≈ 1.300 tokens) viajan en cada
+  llamada. Con más ejemplos, `build_context_block` se queda con los primeros
+  `CONTEXT_MAX_EXAMPLES=7` **por orden de la lista, no por relevancia**, y baja el detalle o
+  descarta hasta `CONTEXT_MAX_TOKENS=6.000`. Esta es la pregunta central de CAG frente a RAG:
+  qué pasa cuando el conocimiento de referencia crece.
+
+Sigue sin optimizarse nada: los valores por defecto de producción no cambian. Cada bloque es
+una **variante de experimento**, declarada en la fila del CSV.
+
+### Puntos de rotura que se esperan
+
+Se anotan antes de correr, para que el informe diga si se confirmaron:
+
+| Punto | Dónde | Qué pasaría |
+|---|---|---|
+| Salida | `LLM_MAX_TOKENS` | 502 `llm_output_truncated` (ya medido) |
+| Tiempo | `LLM_TIMEOUT_SECONDS=60` | Con entradas de 100 k+ o salidas de 16 k, la llamada puede superar el timeout |
+| Ventana configurada | `_prepare` comprueba `budget.fits` (entrada + `LLM_MAX_TOKENS` + margen de 5.000 frente a `MODEL_CONTEXT_WINDOW`) | Rechazo **local** 413 `context_budget_exceeded`, antes de llamar al actor y sin coste. Es un fallo duro y declarado |
+| Ventana del proveedor | LiteLLM / modelo | Solo se alcanza si la variante sube `MODEL_CONTEXT_WINDOW` a la ventana documentada del modelo. Rechazo del proveedor, probablemente como 5xx |
+| Relevancia | `CONTEXT_MAX_EXAMPLES`, `CONTEXT_MAX_TOKENS` | Sin error: el ejemplo pertinente queda fuera en silencio |
+
+### Umbrales de viabilidad, fijados antes de correr
+
+Un punto (tamaño de pliego o N del corpus) es **viable para el CAG** si cumple las tres
+condiciones:
+
+- **Coste y latencia:** cumple los presupuestos de la primera corrida en la mediana. Es decir,
+  latencia ≤ 25 s y coste ≤ 0,05 USD por turno; en C, medidos en caliente.
+- **Recuperación:** en B, recall de los marcadores en la respuesta ≥ 80 %. En C, la aguja se
+  cita en ≥ 2 de 3 repeticiones.
+- **Fallos:** sin fallos duros en ninguna repetición.
+
+El informe da el primer punto que deja de ser viable y por cuál de las tres condiciones.
+
+### Decisiones
+
+- **D24 · Variantes por entorno, en proceso.** (a) **El runner en proceso (TestClient) fija los
+  topes de la variante con variables de entorno y limpia la caché de settings; cada fila
+  guarda `variant` y los topes efectivos.** (b) Un segundo servidor con otro `.env`.
+  *Por qué (a):* no toca los valores por defecto ni el servidor de la demo, y la fila dice con
+  qué topes se midió.
+- **D25 · Cómo entra el corpus sintético.** (a) **Campo aditivo `estimates` (y `max_tokens`) en
+  `ContextOverrides`, que `_context_for` pasa a `build_context_block`**, igual que ya hace con
+  `max_examples`. (b) Parchear `load_estimates` desde el runner.
+  *Por qué (a):* es explícito, tiene test y no depende de detalles internos. En producción
+  nadie lo rellena, así que el comportamiento no cambia.
+- **D26 · Corpus sintético con aguja, y dos medidas distintas.**
+  - **El generador.** (a) **Generador determinista con semilla
+    (`evals/stress/fixtures/build_corpus.py`).** (b) Pedir el corpus a un LLM.
+    - Los distractores son de sectores distintos al de la consulta.
+    - La aguja es una estimación casi idéntica al proyecto consultado. Lleva un **dato
+      exclusivo** que no aparece en ningún otro sitio: su id y título, y una integración con
+      nombre propio.
+    - *Por qué (a):* es reproducible, gratis y sin juez.
+  - **Recuperación (`needle_cited`).** La transcripción pide explícitamente indicar qué proyecto
+    histórico se usa como referencia. Se cumple si la respuesta nombra el id o el título de la
+    aguja. Es la prueba de que el modelo la encontró.
+  - **Influencia (`hours_shift`).** Desplazamiento de las horas totales frente a un **control
+    emparejado sin aguja, con los mismos distractores y el mismo N**. Se reporta como
+    influencia, no como prueba de recuperación. La aguja lleva el doble de la mediana de horas
+    del control de N = 5 para que el desplazamiento se distinga.
+- **D27 · Marcadores densos para el bloque B, comprobados en la respuesta.**
+  - Nueve requisitos marcados al 10, 20 … 90 % del documento, aparte de los tres del bloque 3,
+    que no cambian.
+  - La transcripción pide enumerar los requisitos obligatorios del pliego. El recall se mide
+    **sobre la respuesta del actor**.
+  - Por marcador se registra si sobrevivió a la extracción del PDF, al truncado y al guardrail,
+    para que el denominador sean los marcadores que el actor pudo ver.
+  - La captura en memoria se mide aparte. Su denominador son solo los marcadores dentro de los
+    12.000 caracteres que ve el extractor (`METADATA_ATTACHMENT_CHARS`).
+- **D28 · Cachés: aisladas, verificadas y etiquetadas.**
+  - **Caché de respuestas.** Se borra antes de cada llamada en B y en C. Una fila con
+    `cache_hit_kind ≠ none` se invalida.
+  - **Caché del prefijo.** Es la defensa principal del CAG (en la primera corrida el token
+    cacheado salió ≈ 30 veces más barato), así que C se mide en frío y en caliente.
+    - **Frío:** cada muestra fría lleva un nonce en el primer ejemplo del corpus (un id
+      distinto, mismo contenido), para que el proveedor no pueda tener ese prefijo cacheado.
+    - **Caliente:** la siguiente llamada repite el prefijo exacto.
+  - El estado se **verifica con lo que reporta el proveedor**: `cached_tokens` y, si llega,
+    tokens de creación de caché. Una muestra fría con tokens cacheados, o una caliente sin
+    ellos, se marca como "parcial" y no entra en la comparación.
+- **D29 · Qué es el tamaño de contexto.**
+  - **Eje de las curvas:** los tokens de entrada **de la primera llamada al actor**. Hace falta
+    un campo aditivo en la observación, `actor_input_tokens`, y la estimación del presupuesto
+    (`budget.total_input`).
+  - **Coste del turno:** se sigue usando `tokens_in` agregado (actor, investigación, extractor
+    y reparaciones), con el desglose por llamada.
+- **D30 · Gasto.** Unos 17–20 USD con precio conocido, `--max-usd 30`. Además, los turnos sin
+  precio se estiman con los precios de la regresión de la primera corrida.
+
+### Bloques
+
+**A · Atribución del truncado (control emparejado).**
+- Qué se corre:
+  - `pivot`, una repetición con `LLM_MAX_TOKENS=8000` y otra con `16000`. Las dos con
+    `LLM_TIMEOUT_SECONDS=300` y herramientas como en la primera corrida (el backend de negocio
+    levantado).
+  - 40 turnos, ≈ 3 USD.
+- Por qué cambiar una sola variable: así la diferencia se atribuye a la salida.
+- Qué se registra: `messages_in_window`. Con unos 24 k de entrada, la reserva de salida no
+  debería recortar el historial, y se comprueba.
+- Qué se separa en el informe: truncados, timeouts, otros errores y deriva.
+
+**B · Barrido de contexto de entrada.**
+- Qué se corre:
+  - Un turno con pliego de 50, 100, 150, 200, 250 y 300 KB, tres repeticiones.
+  - Variante sin tope efectivo de adjuntos (`ATTACHMENT_MAX_CHARS` y
+    `ATTACHMENT_MAX_EXPANDED_BYTES`), con `LLM_MAX_TOKENS=16000` y `LLM_TIMEOUT_SECONDS=300`.
+  - Dos subvariantes:
+    - **B1, guarda tal cual:** encuentra el tamaño en que el estimador responde 413, sin coste.
+    - **B2, `MODEL_CONTEXT_WINDOW` a la ventana documentada del modelo:** encuentra el límite
+      del proveedor o del timeout. Solo para los tamaños que B1 rechaza.
+  - ≈ 24 llamadas, ≈ 6 USD.
+- Qué se mide:
+  - `actor_input_tokens`, latencia y coste.
+  - Recall por marcador en la respuesta (D27).
+  - Origen del rechazo: local, proveedor o timeout. Y si llegó a invocarse el actor.
+
+**C · Barrido del corpus del CAG.**
+- Qué se corre (≈ 60 llamadas, 8–10 USD):
+  - N = 5, 25, 50, 100, 200 y 400 estimaciones; 400 ≈ 100 k tokens de contexto.
+  - Aguja al principio, en medio y al final de la lista.
+  - Tier `developer` sin herramientas (sin backend ni Tavily), para que el corpus sea la única
+    referencia.
+  - Modo **CAG tal cual** (topes por defecto): N = 50 y 200, las tres posiciones, una
+    repetición. Qué ejemplos entran se calcula en código, sin modelo. Las llamadas solo
+    muestran la consecuencia.
+  - Modo **CAG sin topes** (todo el corpus en el prompt):
+    - Cada N y posición, en frío y en caliente.
+    - Un control emparejado sin aguja por N.
+    - Tres repeticiones independientes de `needle_cited` en la N donde aparezca el primer
+      deterioro y en la anterior, para reportar proporciones y no un fallo aislado.
+- Qué se mide:
+  - `actor_input_tokens`, `cached_tokens`, latencia y coste, en frío y en caliente.
+  - `needle_cited`, `hours_shift` y si la aguja entró en el prompt.
+
+### Pasos
+
+- **Paso 7 · Variantes.**
+  - `--variant` en el runner con los presets A, B1, B2 y C.
+  - Columnas `variant`, `max_tokens_out`, `context_window`, `attachment_cap`, `corpus_size`,
+    `needle_position`, `needle_included`, `needle_cited`, `hours_shift`, `cache_state`,
+    `rejection_origin` y `actor_input_tokens`.
+  - `ContextOverrides.estimates` y `max_tokens` (D25); `actor_input_tokens` en
+    `TurnObservation`, aditivo (D29).
+  - Tests con el modelo simulado.
+- **Paso 8 · Corpus.** `build_corpus.py` con la aguja y el nonce. `--dry-run` imprime sin coste
+  los tokens de contexto por N y si la aguja entra en el modo tal cual. Corrida del control.
+- **Paso 9 · Marcadores densos** (D27) y los PDFs de 150–300 KB, regenerados y fuera de git.
+- **Paso 10 · Ejecutar A, luego B1, B2 y C,** en segundo plano, con `--resume`, a un CSV aparte:
+  `results_context.csv`. A va primero porque es el más barato y confirma la causa del primer
+  informe.
+- **Paso 11 · Informe.** Sección "Segunda corrida" en `REPORT.md`:
+  - Tablas de A (8 k frente a 16 k), de B (tamaño frente a tokens, latencia, coste, recall por
+    posición y origen del rechazo) y de C (N frente a tokens, coste frío y caliente, latencia,
+    `needle_cited` por posición y modo).
+  - El primer punto no viable según los umbrales y por qué.
+  - El contrafactual de RAG (k fragmentos, tokens fijos) como **estimación con los precios
+    medidos**, no como medición.
+  - Después, insights, CHANGELOG, revisión con GPT-Sol y commit.
+
+### Ejecución (desvíos frente al plan)
+
+- **B ampliado hasta 1.000 KB.** El relleno repetitivo tokeniza a unos 0,23 tokens por carácter, así que 300 KB eran solo 70 k tokens. B1 se amplió a 400–1.000 KB para llegar a la guarda (413 desde 500 KB) y B2 corrió 500, 750 y 1.000 KB.
+- **C se cayó en la segunda llamada** porque cerraba el event loop entre llamadas. Se corrigió con un único `asyncio.Runner` y se reanudó desde el control ya hecho.
+- **Repeticiones extra solo en N = 25, aguja en medio.** Fue el único fallo de cita, y no se repitió.
+- **Gasto:** 21,59 USD conocidos más unos 2–3 USD estimados de turnos truncados sin precio, dentro del tope de 30.
+
+### Riesgos de la segunda corrida
+
+| Riesgo | Mitigación |
+|---|---|
+| Subir `LLM_MAX_TOKENS` convierte truncados en timeouts | `LLM_TIMEOUT_SECONDS=300` en todas las variantes, y el error se registra por tipo |
+| La ventana documentada del proveedor no es la real | B2 anota el tamaño y el mensaje del rechazo: es un resultado |
+| La aguja no se cita ni mueve las horas, ni siquiera con N = 5 | El control lo detecta antes de gastar en C. Entonces C se queda en coste y latencia, y se dice |
+| El proveedor no reporta la caché del prefijo | Las muestras quedan como "parcial" y la comparación frío/caliente se marca como no medida |
+| Gasto por encima de lo previsto | `--max-usd 30`, y A primero |

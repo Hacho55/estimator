@@ -81,7 +81,7 @@ def test_resume_keeps_complete_sessions_and_still_counts_the_discarded_spend(tmp
     sink.write(complete + partial)
 
     resumed = CsvSink(output, resume=True, tier="developer")
-    assert resumed.done == {("attachments", "5", "1", "1")}
+    assert resumed.done == {("", "attachments", "5", "1", "1")}
     assert len(_rows(output)) == 2
     assert len(_rows(output.with_suffix(".discarded.csv"))) == 1
     assert round(resumed.spent, 2) == 0.6  # Lo descartado también se pagó.

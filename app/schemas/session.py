@@ -179,6 +179,10 @@ class TurnObservation(BaseModel):
     tools_used: list[str] = Field(default_factory=list)
     review_decision: str | None = None
     actor_calls: int = Field(default=1, ge=0)  # 0 si la respuesta salió de la caché.
+    # Tamaño del prompt del actor (estimación del presupuesto, antes de llamar): el eje de
+    # contexto de la segunda corrida del stress test. ``tokens_in`` suma todas las llamadas.
+    actor_input_tokens: int | None = Field(default=None, ge=0)
+    cache_creation_tokens: int | None = Field(default=None, ge=0)
 
 
 class SessionEstimateResponse(BaseModel):

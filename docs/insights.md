@@ -128,6 +128,17 @@ proyecto. Entre paréntesis, la sesión de origen.
   Por qué: la latencia y el coste siguieron a `tokens_out` (r = 0,55 y 0,87), no a `tokens_in`,
   que la ventana acota. Una curva plana frente a `tokens_in` no es una buena noticia si la salida
   es la que se rompe. Cuándo no: modelos con salida corta y fija, donde manda la entrada.
+- **Antes de culpar al contexto, comprueba que tus topes no lo acotan** (pre-6). Por qué: la
+  primera corrida no pasó de 37 k tokens por el tope de adjuntos y la ventana de turnos; la
+  curva plana no decía nada del contexto. Mide en tokens, no en KB: el texto repetitivo
+  tokeniza a la cuarta parte. Cuándo no: cuando el tope es el comportamiento que se mide.
+- **El límite del CAG es la selección y el coste, no la capacidad** (pre-6). Por qué: el modelo
+  encontró lo que buscaba con 230 k tokens, pero con un tope por orden de lista el ejemplo
+  pertinente quedó fuera sin aviso, y sin tope el coste creció con el corpus. Es lo que resuelve
+  RAG. Cuándo no: corpus pequeños y estables, que caben enteros con caché del prefijo.
+- **La caché del prefijo se mide, no se supone** (pre-6). Por qué: es la defensa económica del
+  CAG (6,5 veces más barato a 108 k tokens), pero el proveedor la sirvió en 7 de 18 llamadas
+  calientes. Cuándo no: proveedores que garantizan el acierto de caché.
 - **Observabilidad desde el día uno** (3). Por qué: sin trazas ni scores no se itera con datos.
   Cuándo no: no hay excepción.
 

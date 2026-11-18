@@ -133,3 +133,21 @@ El runner necesita el estimador en `AUTH_MODE=jwt` y firma con `STRESS_TOKEN_SEC
 `AI_SERVICE_SECRET` del servidor); sin `--http` levanta la app en proceso. Cada turno trae su
 `observation` (`turn_observed`, ver `docs/specs/observacion.md`). Resultados y lectura en
 [`evals/stress/REPORT.md`](../evals/stress/REPORT.md).
+
+**Segunda corrida (contexto al límite).** Una variante de topes por proceso, siempre en proceso:
+
+```bash
+uv run python -m evals.stress.run --variant A16 --set LLM_MAX_TOKENS=16000 --scenarios pivot --repeats 1 --output evals/stress/results_context_a.csv
+```
+
+```bash
+uv run python -m evals.stress.context_run --block B --variant B1 --sizes 50,100,500,1000
+```
+
+```bash
+uv run python -m evals.stress.context_run --block C --dry-run
+```
+
+```bash
+uv run python -m evals.stress.context_report
+```

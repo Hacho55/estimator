@@ -155,6 +155,10 @@ class ContextOverrides:
     call_name: str = "generate-estimate"  # Nombre de la llamada en trazas (actor-2 en la revisión).
     defer_cache: bool = False  # Con revisión, solo se cachea la salida final aceptada.
     review: str | None = None  # "none" o "acb" fuerza la revisión (experimentos 5F); None = lo del tier.
+    # Solo experimentos (stress test, segunda corrida): corpus de referencia y tope de tokens
+    # propios. En producción van a None y el bloque CAG sale de examples.py con sus topes.
+    estimates: list | None = None
+    context_max_tokens: int | None = None
 
 
 @dataclass
@@ -219,14 +223,22 @@ def _context_for(transcription: str, overrides: ContextOverrides | None) -> Cont
     overrides = overrides or ContextOverrides()
     custom = any(
         value is not None
-        for value in (overrides.format, overrides.detail_level, overrides.max_examples)
+        for value in (
+            overrides.format,
+            overrides.detail_level,
+            overrides.max_examples,
+            overrides.estimates,
+            overrides.context_max_tokens,
+        )
     )
     if not custom:
         return get_context_block(transcription)
     return build_context_block(
+        overrides.estimates,
         fmt=overrides.format,
         detail_level=overrides.detail_level,
         max_examples=overrides.max_examples,
+        max_tokens=overrides.context_max_tokens,
     )
 
 

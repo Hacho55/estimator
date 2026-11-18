@@ -50,6 +50,20 @@ MARKERS = (
     ),
 )
 
+# Segunda corrida (D27): nueve requisitos del 10 al 90 %, para ver si lo del medio se pierde
+# aunque quepa. Van en sus propios PDFs (``attach_dense_*``); los tres de arriba no cambian.
+_DENSE_NAMES = ("Orfeo", "Vesta", "Quimera", "Helix", "Boreal", "Tauro", "Lince", "Nadir", "Ceres")
+DENSE_MARKERS = tuple(
+    Marker(
+        name,
+        round(0.1 * (index + 1), 1),
+        f"REQUISITO OBLIGATORIO D-{index + 1:02d}: el modulo {name} debe registrar cada cambio de turno "
+        f"con sello de tiempo y conservarlo {index + 2} anos.",
+    )
+    for index, name in enumerate(_DENSE_NAMES)
+)
+DENSE_SIZES_KB = (50, 100, 150, 200, 250, 300, 400, 500, 750, 1000)
+
 _FILLER = (
     "Seccion {n}. Contexto de la organizacion: la empresa opera {n} centros logisticos y mantiene "
     "procesos manuales heredados que este proyecto pretende ordenar sin cambiar la operativa diaria. "
@@ -59,7 +73,7 @@ _FILLER = (
 )
 
 
-def build_text(size_kb: int) -> str:
+def build_text(size_kb: int, markers: tuple[Marker, ...] = MARKERS) -> str:
     """Texto de ``size_kb`` × 1.000 caracteres con los marcadores en su posición."""
     target = size_kb * 1000
     filler = ""
@@ -69,24 +83,24 @@ def build_text(size_kb: int) -> str:
         section += 1
     text = filler[:target]
     # De atrás adelante para que insertar no desplace las posiciones pendientes.
-    for marker in sorted(MARKERS, key=lambda item: item.position, reverse=True):
+    for marker in sorted(markers, key=lambda item: item.position, reverse=True):
         cut = text.rfind("\n", 0, int(len(text) * marker.position)) + 1
         text = text[:cut] + marker.sentence + "\n" + text[cut:]
     return text
 
 
-def path_for(size_kb: int) -> Path:
-    return FIXTURES_DIR / f"attach_{size_kb}kb.pdf"
+def path_for(size_kb: int, *, dense: bool = False) -> Path:
+    return FIXTURES_DIR / (f"attach_dense_{size_kb}kb.pdf" if dense else f"attach_{size_kb}kb.pdf")
 
 
-def ensure_pdfs(sizes: tuple[int, ...] = SIZES_KB) -> dict[int, Path]:
+def ensure_pdfs(sizes: tuple[int, ...] = SIZES_KB, *, dense: bool = False) -> dict[int, Path]:
     """Crea los PDFs que falten (o difieran) y devuelve su ruta por tamaño."""
     paths = {}
     for size in sizes:
         if size <= 0:
             continue
-        path = path_for(size)
-        data = text_pdf(build_text(size))
+        path = path_for(size, dense=dense)
+        data = text_pdf(build_text(size, DENSE_MARKERS if dense else MARKERS))
         if not path.is_file() or path.read_bytes() != data:
             path.write_bytes(data)
         paths[size] = path

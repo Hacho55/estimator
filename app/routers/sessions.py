@@ -377,6 +377,8 @@ def _observe(
         tools_used=[item["tool"] for item in result.tools],
         review_decision=str(review.decision) if review else None,
         actor_calls=0 if result.cache_hit else (review.actor_calls if review else 1),
+        actor_input_tokens=getattr(result.token_budget, "total_input", None),
+        cache_creation_tokens=response.usage.cache_creation_tokens,
     )
 
 
